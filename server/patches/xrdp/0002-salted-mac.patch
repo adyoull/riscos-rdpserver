@@ -1,0 +1,113 @@
+diff --git a/libxrdp/libxrdp.h b/libxrdp/libxrdp.h
+index b8b6013..3d52d60 100644
+--- a/libxrdp/libxrdp.h
++++ b/libxrdp/libxrdp.h
+@@ -110,6 +110,7 @@ struct xrdp_sec
+     struct stream client_mcs_data;
+     struct stream server_mcs_data;
+     int decrypt_use_count;
++    unsigned int decrypt_checksum_use_count; /* RDPServer: for salted MACs, never reset */
+     int encrypt_use_count;
+     char decrypt_key[16];
+     char encrypt_key[16];
+diff --git a/libxrdp/xrdp_sec.c b/libxrdp/xrdp_sec.c
+index 068921b..02a6a2b 100644
+--- a/libxrdp/xrdp_sec.c
++++ b/libxrdp/xrdp_sec.c
+@@ -570,6 +570,7 @@ xrdp_sec_decrypt(struct xrdp_sec *self, char *data, int len)
+     }
+     ssl_rc4_crypt(self->decrypt_rc4_info, data, len);
+     self->decrypt_use_count++;
++    self->decrypt_checksum_use_count++;
+ }
+ 
+ /*****************************************************************************/
+@@ -1196,14 +1197,48 @@ xrdp_sec_sign(struct xrdp_sec *self, char *out, int out_len,
+ }
+ 
+ /*****************************************************************************/
+-/* Check a non-FIPS hash is valid
+- *
+- * Salted MAC is not currently supported
++/* RDPServer: the salted MAC ([MS-RDPBCGR] 5.3.6.1.1), which FreeRDP sends
++ * by default: as xrdp_sec_sign, with the count of packets the client has
++ * encrypted so far (before this one) after the data. */
++static void
++xrdp_sec_sign_salted(struct xrdp_sec *self, char *out, int out_len,
++                     char *data, int data_len)
++{
++    char shasig[20];
++    char md5sig[16];
++    char lenhdr[4];
++    char counthdr[4];
++    void *sha1_info;
++    void *md5_info;
++
++    buf_out_uint32(lenhdr, data_len);
++    buf_out_uint32(counthdr, self->decrypt_checksum_use_count - 1);
++    sha1_info = ssl_sha1_info_create();
++    md5_info = ssl_md5_info_create();
++    ssl_sha1_clear(sha1_info);
++    ssl_sha1_transform(sha1_info, self->sign_key, self->rc4_key_len);
++    ssl_sha1_transform(sha1_info, (char *)g_pad_54, 40);
++    ssl_sha1_transform(sha1_info, lenhdr, 4);
++    ssl_sha1_transform(sha1_info, data, data_len);
++    ssl_sha1_transform(sha1_info, counthdr, 4);
++    ssl_sha1_complete(sha1_info, shasig);
++    ssl_md5_clear(md5_info);
++    ssl_md5_transform(md5_info, self->sign_key, self->rc4_key_len);
++    ssl_md5_transform(md5_info, (char *)g_pad_92, 48);
++    ssl_md5_transform(md5_info, shasig, 20);
++    ssl_md5_complete(md5_info, md5sig);
++    g_memcpy(out, md5sig, out_len);
++    ssl_sha1_info_delete(sha1_info);
++    ssl_md5_info_delete(md5_info);
++}
++
++/*****************************************************************************/
++/* Check a non-FIPS hash is valid (salted: RDPServer addition)
+  *
+  * Result is boolean (i.e. != 0 is OK) */
+ static int
+ xrdp_sec_check_sig(struct xrdp_sec *self, const char *sig, int sig_len,
+-                   char *data, int data_len)
++                   char *data, int data_len, int salted)
+ {
+     char computed[8];
+     int rv = 0;
+@@ -1215,7 +1250,14 @@ xrdp_sec_check_sig(struct xrdp_sec *self, const char *sig, int sig_len,
+     }
+     else
+     {
+-        xrdp_sec_sign(self, computed, sig_len, data, data_len);
++        if (salted)
++        {
++            xrdp_sec_sign_salted(self, computed, sig_len, data, data_len);
++        }
++        else
++        {
++            xrdp_sec_sign(self, computed, sig_len, data, data_len);
++        }
+         rv = (memcmp(computed, sig, sig_len) == 0);
+     }
+ 
+@@ -1464,7 +1506,8 @@ xrdp_sec_recv_fastpath(struct xrdp_sec *self, struct stream *s)
+             in_uint8a(s, data_signature, sizeof(data_signature));
+             xrdp_sec_decrypt(self, s->p, (int)(s->end - s->p));
+             if (!xrdp_sec_check_sig(self, data_signature, 8,
+-                                    s->p, (int)(s->end - s->p)))
++                                    s->p, (int)(s->end - s->p),
++                                    (self->fastpath_layer->secFlags & 0x1) != 0))
+             {
+                 LOG(LOG_LEVEL_ERROR, "MAC checksum error for FP-non-FIPS PDU");
+                 return 1;
+@@ -1600,7 +1643,8 @@ xrdp_sec_recv(struct xrdp_sec *self, struct stream *s, int *chan)
+                       sig64_to_uint64(data_signature, 8));
+             xrdp_sec_decrypt(self, s->p, (int)(s->end - s->p));
+             if (!xrdp_sec_check_sig(self, data_signature, 8,
+-                                    s->p, (int)(s->end - s->p)))
++                                    s->p, (int)(s->end - s->p),
++                                    (flags & 0x0800) != 0)) /* SEC_SECURE_CHECKSUM */
+             {
+                 LOG(LOG_LEVEL_ERROR, "MAC checksum error for non-FIPS PDU");
+                 return 1;

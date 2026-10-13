@@ -1,0 +1,25 @@
+diff --git a/libxrdp/libxrdp.c b/libxrdp/libxrdp.c
+index a4ddbf5..4725dd1 100644
+--- a/libxrdp/libxrdp.c
++++ b/libxrdp/libxrdp.c
+@@ -360,16 +360,10 @@ libxrdp_send_palette(struct xrdp_session *session, int *palette)
+     }
+     free_stream(s);
+ 
+-    /* send the orders palette too */
+-    rv = libxrdp_orders_init(session);
+-    if (rv == 0)
+-    {
+-        rv = libxrdp_orders_send_palette(session, palette, 0);
+-    }
+-    if (rv == 0)
+-    {
+-        rv = libxrdp_orders_send(session);
+-    }
++    /* RDPServer: no Cache Color Table order as well. The palette update
++     * is enough for bitmap updates, and clients that didn't announce the
++     * order (FreeRDP 3) drop the connection when they get one. */
++    rv = 0;
+     return rv;
+ }
+ 

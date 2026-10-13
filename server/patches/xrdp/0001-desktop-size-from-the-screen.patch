@@ -1,0 +1,42 @@
+diff --git a/libxrdp/libxrdp.c b/libxrdp/libxrdp.c
+index 5947e53..a4ddbf5 100644
+--- a/libxrdp/libxrdp.c
++++ b/libxrdp/libxrdp.c
+@@ -46,7 +46,7 @@ libxrdp_init(tbus id, struct trans *trans, const char *xrdp_ini)
+     }
+     else
+     {
+-        session->xrdp_ini = g_strdup(XRDP_CFG_PATH "/xrdp.ini");
++        session->xrdp_ini = g_strdup("xrdp.ini"); /* RDPServer: always given */
+     }
+     session->rdp = xrdp_rdp_create(session, trans);
+     session->orders = xrdp_orders_create(session, (struct xrdp_rdp *)session->rdp);
+diff --git a/libxrdp/xrdp_sec.c b/libxrdp/xrdp_sec.c
+index 83467f3..068921b 100644
+--- a/libxrdp/xrdp_sec.c
++++ b/libxrdp/xrdp_sec.c
+@@ -29,6 +29,10 @@
+ #include "log.h"
+ #include "string_calls.h"
+ 
++/* RDPServer: set from the RISC OS screen (src/server.c). */
++extern int g_rdps_desktop_width;
++extern int g_rdps_desktop_height;
++
+ /* some compilers need unsigned char to avoid warnings */
+ static tui8 g_pad_54[40] =
+ {
+@@ -1905,6 +1909,13 @@ xrdp_sec_process_mcs_data_CS_CORE(struct xrdp_sec *self, struct stream *s)
+     in_uint32_le(s, version);
+     in_uint16_le(s, client_info->display_sizes.session_width);
+     in_uint16_le(s, client_info->display_sizes.session_height);
++    /* RDPServer: the desktop is the RISC OS screen, whatever size the
++       client asked for. */
++    if (g_rdps_desktop_width > 0 && g_rdps_desktop_height > 0)
++    {
++        client_info->display_sizes.session_width = g_rdps_desktop_width;
++        client_info->display_sizes.session_height = g_rdps_desktop_height;
++    }
+     in_uint16_le(s, colorDepth);
+     switch (colorDepth)
+     {

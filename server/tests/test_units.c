@@ -1,0 +1,208 @@
+/* RDPServer: unit tests for the portable parts (pixels, capture, keymap,
+   the crypto in ssl_calls.c, the key's signature). Run on Linux, and as
+   ARM code under qemu-arm-aligntrap (RISC OS's alignment rules).
+
+   Copyright (c) 2026 Andrew Youll. MIT licence (see LICENSE). */
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdint.h>
+
+#include "arch.h"
+#include "os_calls.h"
+#include "ssl_calls.h"
+#include "pixels.h"
+#include "capture.h"
+#include "keymap.h"
+#include "keygen.h"
+
+static int checks, fails;
+#define CHECK(c, what) do { checks++; if (!(c)) { fails++; \
+  fprintf (stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, what); } } while (0)
+
+static void test_pixels (void)
+{
+  /* One pixel each way: pure red, then 0x123456-ish. */
+  unsigned char tbgr[8] = { 0xff, 0, 0, 0,  0x12, 0x34, 0x56, 0 };
+  unsigned char trgb[8] = { 0, 0, 0xff, 0,  0x56, 0x34, 0x12, 0 };
+  uint32_t out32[2];
+  uint16_t out16[2];
+  unsigned char out8[2];
+  uint16_t s565 = 0x001f;           /* TBGR 5:6:5: red in the low bits */
+  uint16_t s555 = (uint16_t) (31 << 10);   /* TBGR 1:5:5:5: blue in the top */
+  int pal[256];
+
+  CHECK (pix_format_of (5, -1, 0x40) == PIX_32_TBGR, "32 bpp, ModeFlags &40: TBGR");
+  CHECK (pix_format_of (5, -1, 0x4000) == PIX_32_TRGB, "bit 14: TRGB");
+  CHECK (pix_format_of (4, 65535, 0x80) == PIX_16_565_TBGR, "16 bpp, bit 7, NColour 65535: 5:6:5");
+  CHECK (pix_format_of (4, 65535, 0) == PIX_16_555_TBGR, "16 bpp without bit 7: 1:5:5:5");
+  CHECK (pix_format_of (3, 255, 0x80) == PIX_UNSUPPORTED, "8 bpp isn't shared");
+  CHECK (pix_format_of (4, 4095, 0x80) == PIX_UNSUPPORTED, "16 bpp 4:4:4 isn't shared");
+  CHECK (pix_format_of (5, -1, 0x2000) == PIX_UNSUPPORTED, "YCbCr isn't shared");
+
+  pix_convert (PIX_32_TBGR, tbgr, 8, 2, 1, 32, out32);
+  CHECK (out32[0] == 0xff0000 && out32[1] == 0x123456, "TBGR to 0x00RRGGBB");
+  pix_convert (PIX_32_TRGB, trgb, 8, 2, 1, 24, out32);
+  CHECK (out32[0] == 0xff0000 && out32[1] == 0x123456, "TRGB to 0x00RRGGBB");
+  pix_convert (PIX_32_TBGR, tbgr, 8, 2, 1, 16, out16);
+  CHECK (out16[0] == 0xf800, "red to RGB 5:6:5");
+  CHECK (out16[1] == (((0x12 >> 3) << 11) | ((0x34 >> 2) << 5) | (0x56 >> 3)), "a colour to 5:6:5");
+  pix_convert (PIX_32_TBGR, tbgr, 8, 1, 1, 15, out16);
+  CHECK (out16[0] == 0x7c00, "red to RGB 5:5:5");
+  pix_convert (PIX_32_TBGR, tbgr, 8, 1, 1, 8, out8);
+  CHECK (out8[0] == 0xe0, "red to 3:3:2");
+  pix_convert (PIX_16_565_TBGR, (unsigned char *) &s565, 2, 1, 1, 32, out32);
+  CHECK (out32[0] == 0xff0000, "5:6:5 TBGR low bits are red");
+  pix_convert (PIX_16_555_TBGR, (unsigned char *) &s555, 2, 1, 1, 32, out32);
+  CHECK (out32[0] == 0x0000ff, "1:5:5:5 TBGR top bits are blue");
+  pix_palette_332 (pal);
+  CHECK (pal[0xe0] == 0xff0000 && pal[0x1c] == 0x00ff00 && pal[0x03] == 0x0000ff
+         && pal[0xff] == 0xffffff && pal[0] == 0, "the 3:3:2 palette's corners");
+}
+
+static void test_capture (void)
+{
+  enum { W = 150, H = 70, BPP = 4 };   /* partial tiles both ways */
+  size_t stride = W * BPP + 12;
+  unsigned char *scr = calloc (H, stride);
+  capture c;
+  int i, x, y, w, h, n;
+
+  CHECK (cap_init (&c, W, H, BPP) == 0, "cap_init");
+  CHECK (c.tiles_x == 3 && c.tiles_y == 2, "3 x 2 tiles");
+  /* Everything starts dirty. */
+  i = 0; n = 0;
+  while (cap_next_dirty (&c, &i, &x, &y, &w, &h))
+    n++;
+  CHECK (n == 6, "first frame: all 6 tiles");
+  i = 0;
+  CHECK (!cap_next_dirty (&c, &i, &x, &y, &w, &h), "and then none");
+
+  /* A full scan of a black screen against a black copy: nothing. */
+  CHECK (cap_scan (&c, scr, stride, H) == 0, "no change, no tiles");
+  /* One pixel in the bottom-right partial tile. */
+  scr[69 * stride + 149 * BPP] = 1;
+  CHECK (cap_scan (&c, scr, stride, H) == 1, "one change, one tile");
+  i = 0;
+  CHECK (cap_next_dirty (&c, &i, &x, &y, &w, &h) && x == 128 && y == 64 && w == 22 && h == 6,
+         "the partial tile's rectangle");
+  CHECK (cap_pixel (&c, 149, 69)[0] == 1, "the copy has the new pixel");
+  CHECK (cap_scan (&c, scr, stride, H) == 0, "scanned again: no change");
+
+  /* Scanning in bands wraps round. */
+  scr[10 * stride] = 7;
+  CHECK (cap_scan (&c, scr, stride, 5) == 0, "rows 0-4 don't include row 10");
+  CHECK (cap_scan (&c, scr, stride, 10) == 1, "rows 5-14 do");
+  CHECK (c.next_row == 15, "the next band starts at row 15");
+  cap_scan (&c, scr, stride, 60);
+  CHECK (c.next_row == 5, "and wraps at the bottom");
+
+  /* A redraw request marks the tiles under it, clipped. */
+  i = 0;
+  while (cap_next_dirty (&c, &i, &x, &y, &w, &h))
+    ;
+  cap_mark (&c, 60, -5, 10, 10);
+  i = 0; n = 0;
+  while (cap_next_dirty (&c, &i, &x, &y, &w, &h))
+    n++;
+  CHECK (n == 2, "60..69 x 0..4 covers tiles 0 and 1 of the top row");
+  cap_mark (&c, 500, 500, 10, 10);
+  i = 0;
+  CHECK (!cap_next_dirty (&c, &i, &x, &y, &w, &h), "off the screen: nothing");
+  cap_free (&c);
+  free (scr);
+}
+
+static void test_keymap (void)
+{
+  int seen[128] = { 0 }, sc, e, dup = 0, mapped = 0;
+  CHECK (keymap_lookup (0x01, 0) == 0x00, "Escape");
+  CHECK (keymap_lookup (0x1E, 0) == 0x3C, "A");
+  CHECK (keymap_lookup (0x2A, 0) == 0x4C, "left Shift");
+  CHECK (keymap_lookup (0x1C, 0) == 0x47 && keymap_lookup (0x1C, 1) == 0x67, "Return and keypad Enter");
+  CHECK (keymap_lookup (0x1D, 0) == 0x3B && keymap_lookup (0x1D, 1) == 0x61, "both Ctrls");
+  CHECK (keymap_lookup (0x48, 0) == 0x38 && keymap_lookup (0x48, 1) == 0x59, "keypad 8 and Up");
+  CHECK (keymap_lookup (0x53, 1) == 0x34 && keymap_lookup (0x4F, 1) == 0x35, "Delete and Copy/End");
+  CHECK (keymap_lookup (0x56, 0) == 0x4D && keymap_lookup (0x2B, 0) == 0x33, "the two UK keys");
+  CHECK (keymap_lookup (0x57, 0) == 0x0B && keymap_lookup (0x58, 0) == 0x0C, "F11 and F12");
+  CHECK (keymap_lookup (0x59, 0) == -1 && keymap_lookup (200, 0) == -1, "unknown keys");
+  /* No two scancodes press the same RISC OS key (but Pause/Break). */
+  for (e = 0; e < 2; e++)
+    for (sc = 0; sc < 128; sc++)
+      {
+        int ll = keymap_lookup (sc, e);
+        if (ll < 0 || ll == 0x0F)
+          continue;
+        mapped++;
+        if (seen[ll]++)
+          dup++;
+      }
+  CHECK (dup == 0, "no RISC OS key twice");
+  /* Low-level keys &00-&6E (111), less Pause (left out above), the
+     pound key &1D and keypad # &25 (Archimedes only): 108. */
+  CHECK (mapped == 108, "108 keys mapped");
+}
+
+static void test_crypto (void)
+{
+  /* RC4: the "Key" / "Plaintext" vector (Wikipedia's RC4 article). */
+  char data[] = "Plaintext";
+  static const unsigned char want[9] = { 0xBB, 0xF3, 0x16, 0xE8, 0xD9, 0x40, 0xAF, 0x0A, 0xD3 };
+  void *rc4 = ssl_rc4_info_create ();
+  unsigned char a[4] = { 0x05, 0, 0, 0 }, e3[1] = { 3 }, m[1] = { 13 }, r[4];
+  unsigned char d5[16];
+  void *md5;
+
+  ssl_rc4_set_key (rc4, "Key", 3);
+  ssl_rc4_crypt (rc4, data, 9);
+  CHECK (memcmp (data, want, 9) == 0, "RC4 test vector");
+  ssl_rc4_info_delete (rc4);
+
+  /* 5^3 mod 13 = 8, little-endian in and out. */
+  CHECK (ssl_mod_exp ((char *) r, 4, (char *) a, 4, (char *) m, 1, (char *) e3, 1) == 1
+         && r[0] == 8 && r[1] == 0 && r[3] == 0, "5^3 mod 13");
+
+  md5 = ssl_md5_info_create ();
+  ssl_md5_clear (md5);
+  ssl_md5_transform (md5, "abc", 3);
+  ssl_md5_complete (md5, (char *) d5);
+  CHECK (d5[0] == 0x90 && d5[1] == 0x01 && d5[15] == 0x72, "MD5(abc)");
+  ssl_md5_info_delete (md5);
+}
+
+static void test_keygen (void)
+{
+  /* The signed part's header for a 2048-bit key, as xrdp's own test key
+     has it (keygen/keygen.c g_testkey2048, bytes 0-31). */
+  static const unsigned char hdr[32] =
+  {
+    0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
+    0x01, 0x00, 0x00, 0x00, 0x06, 0x00, 0x1c, 0x01,
+    0x52, 0x53, 0x41, 0x31, 0x08, 0x01, 0x00, 0x00,
+    0x00, 0x08, 0x00, 0x00, 0xff, 0x00, 0x00, 0x00
+  };
+  unsigned char e[4] = { 1, 0, 1, 0 }, n[256], part[RDPS_CERT_SIGNED_LEN], sig[64];
+  int i;
+
+  for (i = 0; i < 256; i++)
+    n[i] = (unsigned char) (i * 7 + 1);
+  rdps_cert_signed_part (e, n, part);
+  CHECK (memcmp (part, hdr, 32) == 0, "proprietary certificate header");
+  CHECK (memcmp (part + 32, e, 4) == 0 && memcmp (part + 36, n, 256) == 0, "exponent and modulus");
+  CHECK (part[292] == 0 && part[299] == 0, "8 bytes of padding");
+  CHECK (rdps_sign_cert (e, n, sig) == 0, "signs");
+  CHECK (rdps_check_cert_sig (e, n, sig) == 0, "and the signature checks with the public exponent");
+  n[100] ^= 1;
+  CHECK (rdps_check_cert_sig (e, n, sig) != 0, "a changed modulus doesn't");
+}
+
+int main (void)
+{
+  test_pixels ();
+  test_capture ();
+  test_keymap ();
+  test_crypto ();
+  test_keygen ();
+  printf ("RDPServer units: %d checks, %d failed\n", checks, fails);
+  return fails != 0;
+}

@@ -5,3 +5,4 @@ handoffs/
 *handoff*.md
 *START-HERE*.md
 .DS_Store
+server/build/
