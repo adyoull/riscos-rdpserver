@@ -28,12 +28,12 @@
 #include "pixels.h"
 #include "capture.h"
 #include "keymap.h"
+#include "input.h"
+#include "auth.h"
 #include "server.h"
 
 volatile int server_stop;
 int g_rdps_desktop_width, g_rdps_desktop_height;
-
-#define MAX_KEYS 128
 
 typedef struct
 {
@@ -47,7 +47,10 @@ typedef struct
   capture cap;
   int client_bpp;
   unsigned char *tilebuf;          /* one tile in the client's depth */
-  unsigned char down[MAX_KEYS];    /* keys and buttons we've pressed */
+  inq input;                       /* input waiting to go to RISC OS */
+  inq_sink sink;
+  auth_db logins;
+  unsigned refuse_until;           /* after a wrong password: cs */
   unsigned handshake_deadline;      /* cs; 0 once the client is up */
   unsigned tiles_sent;
 } server;
@@ -74,24 +77,35 @@ say (const char *fmt, ...)
 /* --- input ---------------------------------------------------------------- */
 
 static void
-key (server *s, int ll, int down)
+sink_move (void *ctx, int x, int y)
 {
-  if (ll < 0 || ll >= MAX_KEYS)
-    return;
-  if (down == s->down[ll])
-    return;   /* clients repeat held keys; RISC OS does its own repeat */
-  s->down[ll] = (unsigned char) down;
+  server *s = ctx;
+  plat_mouse_to (&s->scr, x, y);
+}
+
+static void
+sink_key (void *ctx, int ll, int down)
+{
+  server *s = ctx;
+  if (s->opt->verbose)
+    say ("KeyV %s &%02X", down ? "down" : "up", ll);
   plat_key (ll, down);
 }
 
 static void
+sink_wheel (void *ctx, int dz, int dw)
+{
+  server *s = ctx;
+  if (s->opt->verbose)
+    say ("wheel %d, %d", dz, dw);
+  plat_wheel (dz, dw);
+}
+
+/* Nothing must stay pressed on RISC OS when the client goes. */
+static void
 release_all (server *s)
 {
-  /* Nothing must stay pressed on RISC OS when the client goes. */
-  int i;
-  for (i = 0; i < MAX_KEYS; i++)
-    if (s->down[i])
-      key (s, i, 0);
+  inq_release_all (&s->input, &s->sink);
 }
 
 /* If the program stops for any other reason, let go of the keys first. */
@@ -99,6 +113,7 @@ static void
 at_exit (void)
 {
   release_all (&srv);
+  plat_set_clients (0);
 }
 
 static void
@@ -109,33 +124,54 @@ fatal_signal (int sig)
   raise (sig);
 }
 
+/* RDP's 9-bit wheel rotation: bit 8 is the sign. */
+static int
+wheel_rotation (int flags)
+{
+  int r = flags & 0x1ff;
+  return (r & 0x100) ? r - 0x200 : r;
+}
+
 static void
 mouse (server *s, int flags, int x, int y)
 {
   int down = (flags & PTRFLAGS_DOWN) != 0;
 
+  if (s->opt->verbose && (flags & ~PTRFLAGS_MOVE))
+    say ("mouse flags &%04X at %d,%d", (unsigned) flags, x, y);
+  if (flags & PTRFLAGS_WHEEL)
+    {
+      inq_wheel (&s->input, wheel_rotation (flags), 0);
+      return;
+    }
+  if (flags & PTRFLAGS_HWHEEL)
+    {
+      inq_wheel (&s->input, wheel_rotation (flags), 1);
+      return;
+    }
   if (x < 0) x = 0;
   if (y < 0) y = 0;
   if (x >= s->scr.width) x = s->scr.width - 1;
   if (y >= s->scr.height) y = s->scr.height - 1;
-  if (flags & PTRFLAGS_WHEEL)
-    return;   /* the scroll wheel comes later */
-  plat_mouse_to (&s->scr, x, y);
+  inq_move (&s->input, x, y);
   /* A PC mouse on RISC OS: left Select, middle Menu, right Adjust. */
   if (flags & PTRFLAGS_BUTTON1)
-    key (s, 0x70, down);
+    inq_key (&s->input, 0x70, down);
   if (flags & PTRFLAGS_BUTTON3)
-    key (s, 0x71, down);
+    inq_key (&s->input, 0x71, down);
   if (flags & PTRFLAGS_BUTTON2)
-    key (s, 0x72, down);
+    inq_key (&s->input, 0x72, down);
 }
 
 static void
 scancode (server *s, int flags, int code)
 {
   int ll = keymap_lookup (code, (flags & KBD_FLAG_EXT) != 0);
+  if (s->opt->verbose)
+    say ("key scancode &%02X flags &%04X -> %s&%02X", (unsigned) code,
+         (unsigned) flags, ll < 0 ? "(none) " : "", ll < 0 ? 0 : (unsigned) ll);
   if (ll >= 0)
-    key (s, ll, (flags & KBD_FLAG_UP) == 0);
+    inq_key (&s->input, ll, (flags & KBD_FLAG_UP) == 0);
 }
 
 /* libxrdp's callback: input from the client, and its requests. */
@@ -155,6 +191,8 @@ callback (intptr_t id, int msg, intptr_t param1, intptr_t param2,
       /* Sent when the client window gets the focus back: any key-ups
          sent while it hadn't got it are lost, so let go of everything
          (the client sends key-downs for keys still held). */
+      if (s->opt->verbose)
+        say ("synchronise (lock keys &%X)", (unsigned) param1);
       release_all (s);
       break;
     case RDP_INPUT_MOUSE:
@@ -192,6 +230,7 @@ session_end (server *s, const char *why)
   s->tilebuf = NULL;
   s->was_up = 0;
   s->handshake_deadline = 0;
+  plat_set_clients (0);
   say ("client gone (%s)", why);
 }
 
@@ -201,6 +240,14 @@ session_up (server *s)
 {
   struct xrdp_client_info *ci = s->session->client_info;
 
+  /* The login, before the client is shown anything. */
+  if (s->logins.count > 0 && !auth_check (&s->logins, ci->username, ci->password))
+    {
+      say ("login refused for \"%s\"", ci->username);
+      memset (ci->password, 0, sizeof ci->password);
+      return 1;
+    }
+  memset (ci->password, 0, sizeof ci->password);
   s->client_bpp = ci->bpp;
   if (cap_init (&s->cap, s->scr.width, s->scr.height, pix_bytes (s->fmt)) != 0)
     return -1;
@@ -215,7 +262,9 @@ session_up (server *s)
     }
   cap_scan (&s->cap, s->scr.base, s->scr.stride, s->scr.height);
   cap_mark_all (&s->cap);
-  say ("client up: %d x %d, %d bpp", s->scr.width, s->scr.height, s->client_bpp);
+  say ("client up: %d x %d, %d bpp, user \"%s\"", s->scr.width, s->scr.height,
+       s->client_bpp, ci->username);
+  plat_set_clients (1);
   return 0;
 }
 
@@ -365,6 +414,11 @@ static int
 conn_in (struct trans *listener, struct trans *t)
 {
   server *s = (server *) listener->callback_data;
+  if (s->refuse_until && (int) (plat_time_cs () - s->refuse_until) < 0)
+    {
+      trans_delete (t);
+      return 0;
+    }
   if (s->trans != NULL)
     {
       char desc[64];
@@ -387,6 +441,19 @@ server_run (const server_options *o)
 
   memset (s, 0, sizeof *s);
   s->opt = o;
+  inq_init (&s->input);
+  s->sink.move = sink_move;
+  s->sink.key = sink_key;
+  s->sink.wheel = sink_wheel;
+  s->sink.ctx = s;
+  if (auth_load (o->logins, &s->logins) != 0)
+    {
+      say ("can't read the logins file (%s)", o->logins);
+      return 1;
+    }
+  if (s->logins.count == 0)
+    say ("no login set: anyone who can reach this computer can connect");
+  plat_set_clients (0);
   atexit (at_exit);
   signal (SIGSEGV, fatal_signal);
   signal (SIGBUS, fatal_signal);
@@ -444,6 +511,8 @@ server_run (const server_options *o)
         wait_cs = (int) (next_scan - now) > 0 ? next_scan - now : 0;
       else
         wait_cs = 20;
+      if (s->input.count > 0 && wait_cs > 1)
+        wait_cs = 1;   /* input waiting for its turn */
       tv.tv_sec = (long) (wait_cs / 100);
       tv.tv_usec = (long) (wait_cs % 100) * 10000;
       select (maxfd + 1, &rd, &wr, NULL, &tv);
@@ -465,6 +534,8 @@ server_run (const server_options *o)
             session_end (s, "disconnected");
             continue;
           }
+      inq_run (&s->input, plat_time_cs (), &s->sink);
+
       if (s->trans && !s->was_up && s->handshake_deadline && is_term ())
         {
           session_end (s, "too slow connecting");
@@ -473,9 +544,13 @@ server_run (const server_options *o)
 
       if (s->session && s->session->up_and_running && !s->was_up)
         {
-          if (session_up (s) != 0)
+          int r = session_up (s);
+          if (r != 0)
             {
-              session_end (s, "out of memory");
+              if (r > 0)
+                /* Slow down password guessing: no new clients for 3 s. */
+                s->refuse_until = plat_time_cs () + 300;
+              session_end (s, r > 0 ? "wrong user name or password" : "out of memory");
               continue;
             }
           s->was_up = 1;

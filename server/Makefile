@@ -12,7 +12,7 @@ include $(RCD_DIR)/riscos.mk
 .DEFAULT_GOAL := all
 
 VERSION := 0.1
-TESTSUFFIX := -test1
+TESTSUFFIX := -test2
 B := build
 X := $(B)/xrdp
 M := $(B)/upstream/mbedtls
@@ -20,7 +20,7 @@ M := $(B)/upstream/mbedtls
 XRDP_SRC := $(wildcard $(X)/libxrdp/*.c) \
   $(addprefix $(X)/common/,parse.c list.c list16.c log.c trans.c string_calls.c \
                             file.c fifo.c pixman-region16.c base64.c guid.c)
-OUR_SRC := src/server.c src/capture.c src/pixels.c src/keymap.c src/keygen.c \
+OUR_SRC := src/server.c src/input.c src/auth.c src/capture.c src/pixels.c src/keymap.c src/keygen.c \
            src/os_calls.c src/ssl_calls.c src/main.c
 MBED_SRC := $(filter-out %/entropy_poll.c %/net_sockets.c %/timing.c,$(wildcard $(M)/library/*.c))
 
@@ -114,7 +114,7 @@ $(QO)/rdpserver: $(QO_OBJ) $(QO)/libmbedcrypto.a
 
 # --- tests -------------------------------------------------------------------
 T := $(B)/tests
-UNIT_SRC := tests/test_units.c src/pixels.c src/capture.c src/keymap.c src/keygen.c \
+UNIT_SRC := tests/test_units.c src/input.c src/auth.c src/pixels.c src/capture.c src/keymap.c src/keygen.c \
             src/ssl_calls.c src/os_calls.c
 
 check: checks test-units test-units-qemu test-fake

@@ -1,5 +1,21 @@
 # Changelog
 
+## RDPServer 0.1-test2 (13 October 2026)
+
+- Clicks: the Pi showed a left click acting oddly (a double-click opened
+  the file in !Edit, as with Shift held). Input is now paced: moves go at
+  once, each button or key change waits 3 cs after the last move and 2 cs
+  after the last change, so RISC OS records the button where the pointer
+  is. `-v` (on in !Run for test builds) shows every button, key and wheel
+  event and what went to KeyV, to find the rest of the problem.
+- The scroll wheel: RDP wheel rotation (120 a notch, small steps added
+  up) to PointerV 9, as the USB mouse driver reports it.
+- A login: `RDPServer -setlogin NAME PASSWORD` (salted SHA-256 in
+  Choices:RDPServer.logins), checked before the client sees anything; a
+  wrong one is refused and new connections wait 3 s. `-clearlogin`.
+- `RDPServer$Clients` is 1 while a client is connected, for programs
+  using hardware video overlays (handoff to Reel and EGL).
+
 ## RDPServer 0.1-test1 (13 October 2026)
 
 - First test build. xrdp 0.10.6.1's libxrdp with new `os_calls`/`ssl_calls`

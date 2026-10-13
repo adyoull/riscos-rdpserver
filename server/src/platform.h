@@ -31,6 +31,15 @@ void plat_mouse_to (const rdps_screen *s, int x, int y);
    low-level internal key number (PRM p1247; mouse buttons &70-&72). */
 void plat_key (int low_level_key, int down);
 
+/* Turns the scroll wheel: dz notches (negative = up/away), dw notches
+   sideways (positive = right). */
+void plat_wheel (int dz, int dw);
+
+/* Tells other programs how many clients are watching (RDPServer$Clients),
+   so programs using hardware video overlays, which a screen copy can't
+   see, can draw in the ordinary way instead. */
+void plat_set_clients (int n);
+
 /* Centiseconds, monotonic. */
 unsigned plat_time_cs (void);
 

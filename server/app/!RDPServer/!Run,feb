@@ -13,4 +13,5 @@ RMEnsure CryptRandom 0.12 IfThere System:Modules.CryptRand Then RMLoad System:Mo
 RMEnsure CryptRandom 0.12 Error RDPServer needs the CryptRandom module (0.12 or later). Install it with PackMan.
 | It runs in a task window; press Escape there to stop it. A 1920x1080
 | 32 bpp screen needs about 9 MB for the copy of the screen.
-TaskWindow "<RDPServer$Dir>.RDPServer" -wimpslot 24000K -name "RDPServer" -display
+| Test builds pass -v: every mouse button, key and wheel event is shown.
+TaskWindow "<RDPServer$Dir>.RDPServer -v" -wimpslot 24000K -name "RDPServer" -display

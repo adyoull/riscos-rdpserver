@@ -106,6 +106,18 @@ plat_key (int low_level_key, int down)
   logline (down ? "key %02X down\n" : "key %02X up\n", low_level_key, 0);
 }
 
+void
+plat_wheel (int dz, int dw)
+{
+  logline ("wheel %d %d\n", dz, dw);
+}
+
+void
+plat_set_clients (int n)
+{
+  logline ("clients %d\n", n, 0);
+}
+
 const char *
 plat_resources_dir (void)
 {

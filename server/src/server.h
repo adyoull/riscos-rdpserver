@@ -8,6 +8,7 @@ typedef struct
   const char *port;          /* "3389" */
   const char *address;       /* "" for every interface */
   const char *ini;           /* the xrdp.ini libxrdp reads */
+  const char *logins;        /* the logins file (see auth.h) */
   unsigned interval_cs;      /* time between screen scans */
   int rows_per_scan;         /* rows read each scan (0: the whole screen) */
   int max_seconds;           /* stop after this long (0: never; for tests) */

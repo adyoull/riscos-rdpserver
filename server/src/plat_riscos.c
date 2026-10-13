@@ -5,16 +5,19 @@
    OS_Word 21,3 (reason codes PRM p549; block layout from the classic PRM:
    +1 X, +3 Y, 2-byte OS units). Keys and buttons: KeyV 1/2 (PRM p1244)
    through OS_CallAVector (p290), KeyV = vector 19 (p1343). All three were
-   checked on a Pi 4 with RDPSProbe 0.2.
+   checked on a Pi 4 with RDPSProbe 0.2. Wheel: PointerV 9 (p1313),
+   PointerV = vector 38 (&26, p1343). RDPServer$Clients: OS_SetVarVal.
 
    Copyright (c) 2026 Andrew Youll. MIT licence (see LICENSE). */
 #include <stdint.h>
+#include <stdio.h>
 #include <string.h>
 #include <kernel.h>
 #include <swis.h>
 #include "platform.h"
 
 #define KeyV 19
+#define PointerV 38
 
 const char *
 plat_screen (rdps_screen *s)
@@ -58,6 +61,23 @@ void
 plat_key (int low_level_key, int down)
 {
   _swix (OS_CallAVector, _INR (0, 1) | _IN (9), down ? 2 : 1, low_level_key, KeyV);
+}
+
+/* PointerV 9 (PRM p1313), as RISC OS 5's USB mouse driver reports its
+   wheels: R1 vertical (negative = up/away), R2 extra buttons, R3
+   horizontal (positive = right). */
+void
+plat_wheel (int dz, int dw)
+{
+  _swix (OS_CallAVector, _INR (0, 3) | _IN (9), 9, dz, 0, dw, PointerV);
+}
+
+void
+plat_set_clients (int n)
+{
+  char v[12];
+  int len = sprintf (v, "%d", n);
+  _swix (OS_SetVarVal, _INR (0, 4), "RDPServer$Clients", v, len, 0, 0);
 }
 
 unsigned

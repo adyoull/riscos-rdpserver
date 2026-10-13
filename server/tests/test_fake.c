@@ -11,6 +11,8 @@
 static unsigned char screen[16];
 static unsigned char last21[5];
 static int keyv_r0, keyv_r1, keyv_calls;
+static int ptrv_r[4], ptrv_calls;
+static char var_name[64], var_val[16];
 
 static const _kernel_oserror *vdu (int swi, int r[10])
 {
@@ -45,9 +47,23 @@ static const _kernel_oserror *word (int swi, int r[10])
   return NULL;
 }
 
+static const _kernel_oserror *setvarval (int swi, int r[10])
+{
+  (void) swi;
+  snprintf (var_name, sizeof var_name, "%s", (const char *) (intptr_t) r[0]);
+  snprintf (var_val, sizeof var_val, "%.*s", r[2], (const char *) (intptr_t) r[1]);
+  return NULL;
+}
+
 static const _kernel_oserror *callavector (int swi, int r[10])
 {
   (void) swi;
+  if (r[9] == 38)
+    {
+      memcpy (ptrv_r, r, sizeof ptrv_r);
+      ptrv_calls++;
+      return NULL;
+    }
   if (r[9] != 19)
     abort ();
   keyv_r0 = r[0];
@@ -64,6 +80,7 @@ int main (void)
   fake_swi (OS_ReadVduVariables, "OS_ReadVduVariables", vdu);
   fake_swi (OS_Word, "OS_Word", word);
   fake_swi (OS_CallAVector, "OS_CallAVector", callavector);
+  fake_swi (OS_SetVarVal, "OS_SetVarVal", setvarval);
 
   CHECK (plat_screen (&s) == NULL, "the screen is read");
   CHECK (s.width == 1920 && s.height == 1080, "1920 x 1080 from the window limits");
@@ -84,6 +101,17 @@ int main (void)
   CHECK (keyv_calls == 1 && keyv_r0 == 2 && keyv_r1 == 0x70, "Select pressed: KeyV 2, &70");
   plat_key (0x3C, 0);
   CHECK (keyv_r0 == 1 && keyv_r1 == 0x3C, "A released: KeyV 1, &3C");
+
+  plat_wheel (-2, 1);
+  CHECK (ptrv_calls == 1 && ptrv_r[0] == 9 && ptrv_r[1] == -2 && ptrv_r[2] == 0
+         && ptrv_r[3] == 1, "wheel: PointerV 9, dz in R1, buttons 0 in R2, dw in R3");
+  CHECK (keyv_calls == 2, "the wheel doesn't touch KeyV");
+
+  plat_set_clients (1);
+  CHECK (strcmp (var_name, "RDPServer$Clients") == 0 && strcmp (var_val, "1") == 0,
+         "RDPServer$Clients set to 1");
+  plat_set_clients (0);
+  CHECK (strcmp (var_val, "0") == 0, "and back to 0");
 
   CHECK (strcmp (plat_resources_dir (), "<RDPServer$Dir>") == 0, "resources in the app");
   CHECK (strcmp (plat_choices_dir (), "<RDPServer$Choices>") == 0, "keys in Choices");

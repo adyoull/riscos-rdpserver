@@ -32,7 +32,9 @@ bad () { echo "FAIL $1"; fails=$((fails + 1)); }
 
 Xvfb "$DISP" -screen 0 1024x768x24 >/dev/null 2>&1 & XPID=$!
 sleep 1
-$SRV -p "$PORT" -t 300 >"$OUT/server.log" 2>&1 & SPID=$!
+# Clients must log in as test / x (the e2e clients do).
+$SRV -setlogin test x >"$OUT/setlogin.log" 2>&1 || { bad "-setlogin failed"; cat "$OUT/setlogin.log"; exit 1; }
+$SRV -p "$PORT" -t 400 -v >"$OUT/server.log" 2>&1 & SPID=$!
 trap 'kill $SPID $XPID 2>/dev/null' EXIT
 # The first run makes the key.
 for i in $(seq 1 60); do grep -q listening "$OUT/server.log" && break; sleep 1; done
@@ -80,6 +82,8 @@ run_client () {  # name command...
     : >"$OUT/input.log"
     xdotool mousemove 200 150 click 1 >/dev/null 2>&1; sleep 1
     xdotool key a >/dev/null 2>&1; sleep 1
+    xdotool click 4 >/dev/null 2>&1; sleep 1        # wheel up
+    xdotool click 5 click 5 >/dev/null 2>&1; sleep 1  # wheel down twice
     # Held down when the client goes: the server must let go.
     xdotool keydown Shift_L >/dev/null 2>&1; sleep 1
   fi
@@ -101,10 +105,25 @@ run_client freerdp-32  xfreerdp3 /v:localhost:$PORT /u:test /p:x /sec:rdp /cert:
 grep -q "^mouse 200 150$" "$OUT/input.log" && ok "mouse moved to 200,150" || bad "mouse: $(head -3 "$OUT/input.log" | tr '\n' ' ')"
 grep -q "^key 70 down$" "$OUT/input.log" && grep -q "^key 70 up$" "$OUT/input.log" \
   && ok "left button: Select (&70) down and up" || bad "left button not seen"
+# The move reaches RISC OS before the button goes down.
+awk '/^mouse 200 150$/ && !m {m=NR} /^key 70 down$/ && !d {d=NR} END {exit !(m && d && m < d)}' "$OUT/input.log" \
+  && ok "the pointer moves before the button goes down" || bad "button before the move"
+grep -q "^wheel -1 0$" "$OUT/input.log" && [ "$(grep -c "^wheel 1 0$" "$OUT/input.log")" -eq 2 ] \
+  && ok "wheel: one notch up (-1), two down (+1 each)" || bad "wheel: $(grep wheel "$OUT/input.log" | tr '\n' ' ')"
+grep -q "^clients 1$" "$OUT/input.log" && ok "RDPServer\$Clients set while connected" || bad "RDPServer\$Clients not set"
 grep -q "^key 3C down$" "$OUT/input.log" && grep -q "^key 3C up$" "$OUT/input.log" \
   && ok "A key: low-level &3C down and up" || bad "A key not seen"
 grep -q "^key 4C down$" "$OUT/input.log" && [ "$(grep "^key 4C" "$OUT/input.log" | tail -1)" = "key 4C up" ] \
   && ok "Shift held when the client went: released" || bad "Shift left pressed: $(grep "^key 4C" "$OUT/input.log" | tr '\n' ' ')"
+
+# A wrong password: refused before the client is shown anything.
+up_before=$(grep -c "client up" "$OUT/server.log")
+rdesktop -u test -p wrong -a 32 -N localhost:$PORT >"$OUT/wrongpw.log" 2>&1 & CPID=$!
+for i in $(seq 1 20); do grep -q "login refused" "$OUT/server.log" && break; sleep 1; done
+kill $CPID 2>/dev/null; wait $CPID 2>/dev/null
+grep -q 'login refused for "test"' "$OUT/server.log" && [ "$(grep -c "client up" "$OUT/server.log")" -eq "$up_before" ] \
+  && ok "a wrong password is refused" || bad "a wrong password wasn't refused"
+sleep 4   # the 3 s pause after a refusal
 
 # A client that connects and then says nothing is dropped after 30 s, and
 # the server takes the next one.

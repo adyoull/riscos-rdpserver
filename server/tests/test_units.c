@@ -15,6 +15,8 @@
 #include "capture.h"
 #include "keymap.h"
 #include "keygen.h"
+#include "input.h"
+#include "auth.h"
 
 static int checks, fails;
 #define CHECK(c, what) do { checks++; if (!(c)) { fails++; \
@@ -196,8 +198,112 @@ static void test_keygen (void)
   CHECK (rdps_check_cert_sig (e, n, sig) != 0, "a changed modulus doesn't");
 }
 
+/* --- input pacing ---------------------------------------------------------- */
+
+static char trace[2048];
+static void t_move (void *c, int x, int y) { (void) c; sprintf (trace + strlen (trace), "m%d,%d ", x, y); }
+static void t_key (void *c, int ll, int d) { (void) c; sprintf (trace + strlen (trace), "k%02X%c ", ll, d ? 'd' : 'u'); }
+static void t_wheel (void *c, int dz, int dw) { (void) c; sprintf (trace + strlen (trace), "w%d,%d ", dz, dw); }
+
+static void test_input (void)
+{
+  inq q;
+  inq_sink k = { t_move, t_key, t_wheel, NULL };
+  unsigned t = 1000;
+
+  /* A click as clients send it: move, down, up, all at once. */
+  inq_init (&q);
+  trace[0] = 0;
+  inq_move (&q, 10, 20);
+  inq_key (&q, 0x70, 1);
+  inq_key (&q, 0x70, 0);
+  CHECK (inq_run (&q, t, &k) == 2, "the move goes, the button waits");
+  CHECK (strcmp (trace, "m10,20 ") == 0, "only the move so far");
+  inq_run (&q, t + INQ_AFTER_MOVE_CS - 1, &k);
+  CHECK (strcmp (trace, "m10,20 ") == 0, "not before the pointer has caught up");
+  inq_run (&q, t + INQ_AFTER_MOVE_CS, &k);
+  CHECK (strcmp (trace, "m10,20 k70d ") == 0, "then the button goes down");
+  inq_run (&q, t + INQ_AFTER_MOVE_CS + INQ_BETWEEN_CS - 1, &k);
+  CHECK (strcmp (trace, "m10,20 k70d ") == 0, "and stays down a moment");
+  CHECK (inq_run (&q, t + INQ_AFTER_MOVE_CS + INQ_BETWEEN_CS, &k) == 0, "then comes up");
+  CHECK (strcmp (trace, "m10,20 k70d k70u ") == 0, "down then up, in order");
+
+  /* Moves in a row are merged; held keys aren't pressed twice. */
+  inq_init (&q);
+  trace[0] = 0;
+  inq_move (&q, 1, 1);
+  inq_move (&q, 2, 2);
+  inq_move (&q, 3, 3);
+  inq_key (&q, 0x3C, 1);
+  inq_key (&q, 0x3C, 1);
+  inq_key (&q, 0x3C, 1);
+  inq_key (&q, 0x4C, 0);         /* up for a key that isn't down */
+  inq_run (&q, 0, &k);
+  inq_run (&q, 100, &k);
+  CHECK (strcmp (trace, "m3,3 k3Cd ") == 0, "one move, one key-down");
+
+  /* Releasing everything: what was pressed comes up at once. */
+  trace[0] = 0;
+  inq_key (&q, 0x4C, 1);
+  inq_run (&q, 200, &k);
+  inq_key (&q, 0x70, 1);           /* queued, not yet given to RISC OS */
+  inq_release_all (&q, &k);
+  CHECK (strstr (trace, "k3Cu") && strstr (trace, "k4Cu") && !strstr (trace, "k70"),
+         "pressed keys released; the queued button never pressed");
+  CHECK (q.count == 0, "nothing left waiting");
+
+  /* The wheel: 120 a notch, small steps add up, sign as RISC OS wants. */
+  inq_init (&q);
+  trace[0] = 0;
+  inq_wheel (&q, 120, 0);
+  inq_wheel (&q, -240, 0);
+  inq_wheel (&q, 60, 0);
+  inq_wheel (&q, 60, 0);
+  inq_wheel (&q, 120, 1);
+  inq_run (&q, 0, &k);
+  CHECK (strcmp (trace, "w-1,0 w2,0 w-1,0 w0,1 ") == 0, "wheel notches");
+}
+
+static void test_auth (void)
+{
+  const char *f = "build/tests/logins-test";
+  auth_db db;
+  FILE *o;
+
+  remove (f);
+  CHECK (auth_load (f, &db) == 0 && db.count == 0, "no file: no logins");
+  CHECK (auth_set (f, "andrew", "pass word") == 0, "set a login");
+  CHECK (auth_load (f, &db) == 0 && db.count == 1, "read it back");
+  CHECK (auth_check (&db, "andrew", "pass word"), "right password");
+  CHECK (auth_check (&db, "Andrew", "pass word"), "name in any case");
+  CHECK (!auth_check (&db, "andrew", "pass Word"), "password is case-sensitive");
+  CHECK (!auth_check (&db, "andrew", ""), "empty password");
+  CHECK (!auth_check (&db, "bob", "pass word"), "unknown name");
+  CHECK (auth_set (f, "two words", "x") != 0, "no spaces in a name");
+  o = fopen (f, "r");
+  {
+    char buf[512];
+    size_t n = fread (buf, 1, sizeof buf - 1, o);
+    buf[n] = 0;
+    CHECK (strstr (buf, "pass word") == NULL, "the password isn't stored");
+  }
+  fclose (o);
+  o = fopen (f, "w");
+  fputs ("andrew zz zz\n", o);
+  fclose (o);
+  CHECK (auth_load (f, &db) == -1 && db.count == 0, "a garbled file is an error, not open access");
+  o = fopen (f, "w");   /* a salt one digit too long */
+  fputs ("andrew 000000000000000000000000000000001 "
+         "0000000000000000000000000000000000000000000000000000000000000000\n", o);
+  fclose (o);
+  CHECK (auth_load (f, &db) == -1, "wrong-length hex is an error");
+  remove (f);
+}
+
 int main (void)
 {
+  test_input ();
+  test_auth ();
   test_pixels ();
   test_capture ();
   test_keymap ();

@@ -2,13 +2,17 @@
 
      RDPServer [-p port] [-a address] [-i centiseconds] [-r rows]
                [-t seconds] [-v]
+     RDPServer -setlogin NAME PASSWORD
+     RDPServer -clearlogin
 
    -p  port to listen on (3389)
    -a  address to listen on (every interface)
    -i  time between screen scans, centiseconds (10)
    -r  rows of the screen read each scan (0, the default: all of them)
    -t  stop after this many seconds (for tests)
-   -v  say more
+   -v  say more (each input event)
+   -setlogin    set the one user name and password clients must give
+   -clearlogin  let anyone connect again
 
    Copyright (c) 2026 Andrew Youll. MIT licence (see LICENSE). */
 #include <signal.h>
@@ -19,9 +23,10 @@
 
 #include "platform.h"
 #include "keygen.h"
+#include "auth.h"
 #include "server.h"
 
-#define VERSION "0.1"
+#define VERSION "0.1-test2"
 
 static void
 on_signal (int sig)
@@ -34,7 +39,9 @@ static int
 usage (void)
 {
   fprintf (stderr, "Usage: RDPServer [-p port] [-a address] [-i centiseconds] "
-           "[-r rows] [-t seconds] [-v]\n");
+           "[-r rows] [-t seconds] [-v]\n"
+           "       RDPServer -setlogin NAME PASSWORD\n"
+           "       RDPServer -clearlogin\n");
   return 2;
 }
 
@@ -42,8 +49,27 @@ int
 main (int argc, char **argv)
 {
   server_options o;
-  char keys[512], ini[512];
+  char keys[512], ini[512], logins[512];
   int i;
+
+  snprintf (logins, sizeof logins, "%s/logins", plat_choices_dir ());
+  if (argc == 4 && strcmp (argv[1], "-setlogin") == 0)
+    {
+      if (auth_set (logins, argv[2], argv[3]) != 0)
+        {
+          fprintf (stderr, "RDPServer: couldn't save the login (a name has no "
+                   "spaces and is under 64 characters)\n");
+          return 1;
+        }
+      printf ("RDPServer: clients must now log in as %s.\n", argv[2]);
+      return 0;
+    }
+  if (argc == 2 && strcmp (argv[1], "-clearlogin") == 0)
+    {
+      remove (logins);
+      printf ("RDPServer: no login now: anyone can connect.\n");
+      return 0;
+    }
 
   memset (&o, 0, sizeof o);
   o.port = "3389";
@@ -76,6 +102,7 @@ main (int argc, char **argv)
 
   snprintf (ini, sizeof ini, "%s/xrdp.ini", plat_resources_dir ());
   o.ini = ini;
+  o.logins = logins;
   snprintf (keys, sizeof keys, "%s/rsakeys.ini", plat_choices_dir ());
   if (access (keys, R_OK) != 0)
     {
