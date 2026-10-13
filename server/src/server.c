@@ -704,12 +704,6 @@ screen_resized (server *s)
   pix_format fmt;
   int tries;
 
-  if (ci->client_resize_mode == CRMODE_NONE)
-    {
-      session_end (s, "the screen mode changed, and this client can't be "
-                   "resized: connect again");
-      return -1;
-    }
   /* The desktop redraws everything after a mode change (and a program
      may change mode more than once): wait until it stays put. */
   if (plat_screen (&cur) != NULL)
@@ -736,6 +730,34 @@ screen_resized (server *s)
     {
       session_end (s, "the screen mode changed to one that can't be shared "
                    "(use 16 or 32 bpp: thousands or millions of colours)");
+      return -1;
+    }
+  if (cur.width == s->scr.width && cur.height == s->scr.height)
+    {
+      /* Same size (other colours, or another line length): the client's
+         desktop stays as it is, and only the picture is sent again.
+         Resizing it would have the client tear its window down and build
+         it again (deactivation-reactivation), a flash the RISC OS screen
+         never shows. */
+      cap_free (&s->cap);
+      s->scr = cur;
+      s->fmt = fmt;
+      if (cap_init (&s->cap, cur.width, cur.height, pix_bytes (fmt)) != 0)
+        {
+          session_end (s, "out of memory for the new screen mode");
+          return -1;
+        }
+      cap_scan (&s->cap, s->scr.base, s->scr.stride, s->scr.height);
+      cap_mark_all (&s->cap);
+      s->last_activity = plat_time_cs ();
+      say ("the screen mode changed, at the same size: the client's desktop "
+           "stays as it is");
+      return 0;
+    }
+  if (ci->client_resize_mode == CRMODE_NONE)
+    {
+      session_end (s, "the screen mode changed, and this client can't be "
+                   "resized: connect again");
       return -1;
     }
   cap_free (&s->cap);

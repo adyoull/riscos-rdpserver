@@ -1,4 +1,4 @@
-RDPServer 0.2-test4 (test build)
+RDPServer 0.2-test5 (test build)
 ================================
 
 Lets you use this RISC OS desktop from another computer with Remote
@@ -88,8 +88,11 @@ What isn't done yet
   goes. Programs that use VideoOverlay some other way still show a
   black area. RDPServer$Clients is 1 while a client is connected.
 - Changing the screen mode while a client is connected resizes the
-  client's desktop to the new mode. A client that can't be resized
-  (it didn't say it could) is disconnected: connect again.
+  client's desktop to the new mode; the client redraws its window as it
+  does that, so it flashes once. A mode change at the same size (other
+  colours, say) doesn't resize it, so doesn't flash. A client that
+  can't be resized (it didn't say it could) is disconnected: connect
+  again.
 - One client at a time. A client that connects but doesn't finish
   connecting within 30 seconds is dropped.
 

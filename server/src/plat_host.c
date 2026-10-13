@@ -16,13 +16,14 @@
 
 static unsigned char *screen;
 static int sw = 640, sh = 480;
+static int spad;                 /* pixels past the end of each line */
 static int square_at = -1;
 
 /* TBGR: red in the low byte. */
 static void
 put (int x, int y, unsigned r, unsigned g, unsigned b)
 {
-  unsigned char *p = screen + ((size_t) y * sw + x) * 4;
+  unsigned char *p = screen + ((size_t) y * (sw + spad) + x) * 4;
   p[0] = (unsigned char) r; p[1] = (unsigned char) g; p[2] = (unsigned char) b; p[3] = 0;
 }
 
@@ -80,22 +81,29 @@ plat_screen (rdps_screen *s)
         /* "bank": the same mode, another screen bank shown (OS_Byte 113) */
         if (fscanf (f, "%7s", word) == 1 && strcmp (word, "bank") == 0)
           {
-            n = malloc ((size_t) sw * sh * 4);
+            n = malloc ((size_t) (sw + spad) * sh * 4);
             if (n)
               {
-                memcpy (n, screen, (size_t) sw * sh * 4);
+                memcpy (n, screen, (size_t) (sw + spad) * sh * 4);
                 free (screen);
                 screen = n;
               }
           }
-        else if (fseek (f, at0, SEEK_SET) == 0 && fscanf (f, "%dx%d", &w, &h) == 2 && w >= 64 && h >= 64 && w <= 4096 && h <= 4096
-            && (n = malloc ((size_t) w * h * 4)) != NULL)
+        /* "WxH", or "WxH pad": each line 32 pixels longer than it shows
+           (another LineLength, as a mode at the same size can have) */
+        else if (fseek (f, at0, SEEK_SET) == 0 && fscanf (f, "%dx%d", &w, &h) == 2 && w >= 64 && h >= 64 && w <= 4096 && h <= 4096)
           {
-            free (screen);
-            screen = n;
-            sw = w;
-            sh = h;
-            square_at = -1;
+            int pad = fscanf (f, "%7s", word) == 1 && strcmp (word, "pad") == 0 ? 32 : 0;
+            if ((n = malloc ((size_t) (w + pad) * h * 4)) != NULL)
+              {
+                free (screen);
+                screen = n;
+                memset (screen, 0x55, (size_t) (w + pad) * h * 4);
+                sw = w;
+                sh = h;
+                spad = pad;
+                square_at = -1;
+              }
           }
         fclose (f);
         remove (mf);
@@ -113,7 +121,7 @@ plat_screen (rdps_screen *s)
   s->ncolour = -1;
   s->modeflags = 0x40;
   s->xeig = s->yeig = 1;
-  s->stride = (size_t) sw * 4;
+  s->stride = (size_t) (sw + spad) * 4;
   s->base = screen;
   return NULL;
 }

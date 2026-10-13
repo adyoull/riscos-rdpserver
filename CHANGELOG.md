@@ -1,5 +1,19 @@
 # Changelog
 
+## RDPServer 0.2-test5 (13 October 2026)
+
+- The client flashed at every screen mode change (owner: "the flicker
+  coincided exactly with ... mode change"). Resizing the client's
+  desktop is the protocol's deactivation-reactivation, and the client
+  tears its window down and builds it again. A mode change at the same
+  size (other colours, another line length) no longer resizes the
+  client: the new mode's picture is just sent again, so there's no
+  flash. A change of size still resizes it (and so still flashes once:
+  RDP has no other way). A client that can't be resized now keeps going
+  through same-size mode changes too.
+- The module is 0.06.
+
+
 ## RDPServer 0.2-test4 (13 October 2026)
 
 - 0.2-test3 never switched overlays off when EGL$Overlay was unset (as

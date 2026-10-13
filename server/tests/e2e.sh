@@ -170,6 +170,16 @@ echo bank >"$OUT/mode"
 sleep 3
 [ "$(grep -c "client gone" "$OUT/server.log")" -eq "$before_gone" ] && ! grep -q "desktop is now" "$OUT/server.log" \
   && ok "a screen bank swap isn't taken for a mode change" || bad "a bank swap ended or resized the session"
+# A mode change at the same size (here a longer LineLength): the client
+# isn't resized (that would make it flash), only the picture is sent again.
+echo "640x480 pad" >"$OUT/mode"
+for i in $(seq 1 20); do grep -q "at the same size" "$OUT/server.log" && break; sleep 0.5; done
+sleep 3
+grep -q "at the same size: the client's desktop stays" "$OUT/server.log" && ! grep -q "desktop is now" "$OUT/server.log" \
+  && ok "a mode change at the same size doesn't resize the client" || bad "same-size mode change: $(grep -i 'mode' "$OUT/server.log" | tail -2)"
+import -window root "$OUT/samesize.png" 2>/dev/null
+p=$(pixel "$OUT/samesize.png" 600 450); near "$p" 128,128,128 && ok "same size: grey at 600,450 (the new line length read)" || bad "same size: 600,450 is $p"
+p=$(pixel "$OUT/samesize.png" 100 300); near "$p" 0,0,255 && ok "same size: blue at 100,300" || bad "same size: 100,300 is $p"
 echo 800x600 >"$OUT/mode"
 for i in $(seq 1 20); do grep -q "desktop is now 800 x 600" "$OUT/server.log" && break; sleep 0.5; done
 sleep 4
