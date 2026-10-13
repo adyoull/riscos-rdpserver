@@ -20,6 +20,7 @@ static volatile int stopping;       /* rdps_cmd_stop: end everything */
 static int running;                 /* server_start succeeded */
 static unsigned wake;               /* when the thread next wants to run */
 static int ready;                   /* rdps_thread_init done */
+unsigned rdps_yielded_cs;
 
 static void
 body (void *arg)
@@ -107,8 +108,10 @@ rdps_wait_cs (unsigned cs)
 {
   if (co_inside ())
     {
-      wake = plat_time_cs () + cs;
+      unsigned t = plat_time_cs ();
+      wake = t + cs;
       co_yield ();
+      rdps_yielded_cs += plat_time_cs () - t;
       return;
     }
 #ifndef RDPS_MODULE

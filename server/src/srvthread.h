@@ -44,6 +44,10 @@ void rdps_cmd_disconnect (void);
    sleeps on Linux. */
 void rdps_wait_cs (unsigned cs);
 
+/* Centiseconds the thread has spent waiting (other programs running), in
+   all: server_step's "longest step" leaves them out. */
+extern unsigned rdps_yielded_cs;
+
 /* 1 while the client is being dropped or the server stopped: libxrdp's
    waits end (server.c's is_term). */
 int rdps_thread_ending (void);

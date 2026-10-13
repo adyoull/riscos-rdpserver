@@ -1,5 +1,35 @@
 # Changelog
 
+## RDPServer 0.2-test3 (13 October 2026)
+
+- A session ended with "client gone (the screen mode changed)" when the
+  mode hadn't changed: a program that double-buffers (it swaps screen
+  banks with OS_Byte 113, as Reel does) moves the address of the
+  displayed screen, and 0.2-test2 took any new address for a mode
+  change. Now only a change of size, colours or line length counts; a
+  bank swap is followed, and the bank that's shown is what's sent.
+- A real mode change no longer ends the session: the client's desktop is
+  resized to the new mode ([MS-RDPBCGR] deactivation-reactivation) and
+  the whole screen is sent again. The server waits for the mode to
+  settle first. A client that didn't say it can be resized, or one that
+  doesn't come back within 30 seconds, is disconnected, as before.
+- The log's "longest step" no longer counts time the server spent
+  waiting for other programs (a step that waits for the client yields),
+  so it shows the server's own work: 0.2-test2 showed 310 cs for the
+  key exchange.
+- Video shows on the client: hardware overlays (VideoOverlay) never
+  reach screen memory, so the client saw a black area where Reel's
+  video or an EGL window was. While a client is connected the server
+  sets EGL$Overlay to "off", which Reel and riscos-mesa's EGL read at
+  every frame: they draw ordinarily instead. What EGL$Overlay was
+  before is put back when the client goes (a string literally, a
+  number or macro as it was; unset again if it was unset), unless it
+  was changed meanwhile; a value it can't read, or a code variable, is
+  left alone.
+- The module is 0.04 (!Run's RMEnsure asks for it, so test2's 0.03 is
+  replaced).
+
+
 ## RDPServer 0.2-test2 (13 October 2026)
 
 - 0.2-test1 crashed on the Pi as soon as the front end started the

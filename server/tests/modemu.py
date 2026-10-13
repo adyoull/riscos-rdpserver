@@ -53,10 +53,11 @@ RMA_SIZE = 0x00800000
 DA = 0x10000000             # the dynamic area
 DA_MAX = 48 * 1024 * 1024
 SCREEN = 0x30000000
-SW, SH = 640, 480
+SW, SH = 640, 480          # the first mode (set_mode changes it)
+SCREEN_MAP = 0x00800000    # room for two screens up to 1024x1024 (a mode change moves it)
 
 SWI = dict(OS_Byte=0x06, OS_Word=0x07, OS_EnterOS=0x16, OS_Heap=0x1D, OS_Module=0x1E,
-           OS_Claim=0x1F, OS_Release=0x20, OS_SetVarVal=0x24, OS_ChangeDynamicArea=0x2A,
+           OS_Claim=0x1F, OS_Release=0x20, OS_ReadVarVal=0x23, OS_SetVarVal=0x24, OS_ChangeDynamicArea=0x2A,
            OS_GenerateError=0x2B, OS_ReadVduVariables=0x31, OS_CallAVector=0x34,
            OS_CallAfter=0x3B, OS_CallEvery=0x3C, OS_RemoveTickerEvent=0x3D,
            OS_ReadMonotonicTime=0x42, OS_AddCallBack=0x54, OS_RemoveCallBack=0x5F,
@@ -131,7 +132,7 @@ class RiscOS:
         self.mu = mu = Uc(UC_ARCH_ARM, UC_MODE_ARM)
         for addr, size in ((LOW, 0x1000), (USER, USER_SIZE), (SVC_TOP - SVC_SIZE, SVC_SIZE),
                            (ERRS, 0x10000), (RMA, RMA_SIZE), (DA, DA_MAX),
-                           (SCREEN, (SW * SH * 4 + 0xFFF) & ~0xFFF)):
+                           (SCREEN, SCREEN_MAP)):
             mu.mem_map(addr, size)
         mu.mem_write(RET, b"\xfe\xff\xff\xea")
         mu.hook_add(UC_HOOK_INTR, self._swi_hook)
@@ -163,6 +164,7 @@ class RiscOS:
         self.errorbox = False
         self.swilog = []
         self.fatal = None
+        self.sw, self.sh, self.screen = SW, SH, SCREEN
         self.draw_screen()
         data = open(module_file, "rb").read()
         self.base = base
@@ -218,7 +220,21 @@ class RiscOS:
         return int((time.monotonic() - self.t0) * 100) + 0x1000
 
     # --- the screen: four quarters and a white square, as plat_host.c ---
+    def set_mode(self, w, h):
+        """A pretend mode change: a new size, and the screen moves."""
+        self.sw, self.sh = w, h
+        self.screen = SCREEN + 0x00400000 if self.screen == SCREEN else SCREEN
+        self.draw_screen()
+
+    def swap_bank(self):
+        """Another screen bank shown (OS_Byte 113): same mode, same picture,
+        a new DisplayStart."""
+        old = self.screen
+        self.screen = SCREEN + 0x00400000 if old == SCREEN else SCREEN
+        self.mu.mem_write(self.screen, bytes(self.mu.mem_read(old, self.sw * self.sh * 4)))
+
     def draw_screen(self, box=None):
+        SW, SH = self.sw, self.sh
         row = bytearray()
         for x in range(SW):
             row += b"\xff\x00\x00\x00" if x < SW // 2 else b"\x00\xff\x00\x00"
@@ -236,7 +252,7 @@ class RiscOS:
             px = bytes((cr, cg, cb, 0))
             for y in range(y0, y1):
                 img[(y * SW + x0) * 4:(y * SW + x1) * 4] = px * (x1 - x0)
-        self.mu.mem_write(SCREEN, bytes(img))
+        self.mu.mem_write(self.screen, bytes(img))
 
     # --- running code ---
     def _mode(self, mode):
@@ -413,8 +429,8 @@ class RiscOS:
             else:
                 raise Fatal("OS_Word %d" % r[0])
         elif n == SWI["OS_ReadVduVariables"]:
-            vals = {0: 0x40, 3: 0xFFFFFFFF, 4: 1, 5: 1, 6: SW * 4, 9: 5, 11: SW - 1,
-                    12: SH - 1, 149: SCREEN}
+            vals = {0: 0x40, 3: 0xFFFFFFFF, 4: 1, 5: 1, 6: self.sw * 4, 9: 5,
+                    11: self.sw - 1, 12: self.sh - 1, 149: self.screen}
             i = 0
             while True:
                 v = self.r32(r[0] + 4 * i)
@@ -432,7 +448,29 @@ class RiscOS:
             else:
                 raise Fatal("OS_CallAVector %d" % r[9])
         elif n == SWI["OS_SetVarVal"]:
-            self.vars[self.string(r[0])] = bytes(self.mu.mem_read(r[1], r[2])).decode("latin-1")
+            # string variables only (types 0, 4); length -1 deletes (PRM p489)
+            name = self.string(r[0])
+            if r[2] & 0x80000000:
+                if name not in self.vars:
+                    return self.error(0x124, "System variable '%s' not found" % name)
+                del self.vars[name]
+            else:
+                if r[4] not in (0, 4):         # strings (4: literal)
+                    raise Fatal("OS_SetVarVal type %d" % r[4])
+                self.vars[name] = bytes(self.mu.mem_read(r[1], r[2])).decode("latin-1")
+        elif n == SWI["OS_ReadVarVal"]:
+            # no wildcards, no expansion: a string variable comes back as it is
+            name = self.string(r[0])
+            if r[3] != 0 or name not in self.vars:
+                r[2] = 0
+                return self.error(0x124, "System variable '%s' not found" % name)
+            v = self.vars[name].encode("latin-1")
+            if len(v) > r[2]:
+                r[2] = ~len(v) & 0xFFFFFFFF
+                return self.error(0x1E4, "Buffer overflow")
+            self.mu.mem_write(r[1], v)
+            r[2] = len(v)
+            r[4] = 0
         elif n == SWI["OS_Module"]:
             if r[0] == 6:
                 r[2] = self.rma_claim(r[3])

@@ -54,6 +54,8 @@ typedef struct
   inq_sink sink;
   auth_db logins;
   unsigned refuse_until;           /* after a wrong password: cs */
+  unsigned resize_deadline;        /* cs; the client must be back by then */
+  int palette_due;                 /* 8 bpp client reactivated: palette again */
   unsigned handshake_deadline;      /* cs; 0 once the client is up */
   unsigned tiles_sent;
   unsigned next_scan;              /* when the next band of rows is due */
@@ -320,6 +322,13 @@ callback (intptr_t id, int msg, intptr_t param1, intptr_t param2,
     case RDP_INPUT_MOUSE:
       mouse (s, (int) param3, (int) param1, (int) param2);
       break;
+    case 0x5559:   /* output suppressed (param1 1) or allowed again (0) */
+      if (param1 == 0 && s->cap.frame)
+        {
+          cap_mark_all (&s->cap);
+          s->palette_due = s->client_bpp == 8;
+        }
+      break;
     case 0x4444:   /* the client asks for a rectangle to be redrawn */
       if (s->cap.frame)
         cap_mark (&s->cap, (int) param1, (int) param2, (int) param3, (int) param4);
@@ -419,6 +428,13 @@ send_dirty (server *s)
 {
   int i = 0, x, y, w, h;
   unsigned slice = plat_time_cs ();
+  if (s->palette_due)
+    {
+      int pal[256];
+      pix_palette_332 (pal);
+      libxrdp_send_palette (s->session, pal);
+      s->palette_due = 0;
+    }
   while (cap_next_dirty (&s->cap, &i, &x, &y, &w, &h))
     {
       if ((int) (plat_time_cs () - slice) >= SEND_SLICE_CS)
@@ -662,6 +678,96 @@ server_start (const server_options *o)
   return 0;
 }
 
+/* The screen mode changed while a client is connected. If the client said
+   it can be resized ([MS-RDPBCGR] 2.2.7.1.2, desktopResizeFlag), its
+   desktop is given the new size with a deactivation-reactivation
+   sequence (libxrdp_reset, as xrdp does when a client resizes): the
+   session carries on and the whole new screen is sent once the client is
+   active again. Otherwise, or if the new mode can't be shared, the
+   session ends. Returns 0 if it carries on. */
+#define RESIZE_SETTLE_CS 20
+#define RESIZE_TRIES 10
+
+static int
+same_mode (const rdps_screen *a, const rdps_screen *b)
+{
+  return a->width == b->width && a->height == b->height
+         && a->log2bpp == b->log2bpp && a->stride == b->stride
+         && a->ncolour == b->ncolour && a->modeflags == b->modeflags;
+}
+
+static int
+screen_resized (server *s)
+{
+  struct xrdp_client_info *ci = s->session->client_info;
+  rdps_screen cur, again;
+  pix_format fmt;
+  int tries;
+
+  if (ci->client_resize_mode == CRMODE_NONE)
+    {
+      session_end (s, "the screen mode changed, and this client can't be "
+                   "resized: connect again");
+      return -1;
+    }
+  /* The desktop redraws everything after a mode change (and a program
+     may change mode more than once): wait until it stays put. */
+  if (plat_screen (&cur) != NULL)
+    {
+      session_end (s, "the screen mode changed");
+      return -1;
+    }
+  for (tries = 0; tries < RESIZE_TRIES; tries++)
+    {
+      rdps_wait_cs (RESIZE_SETTLE_CS);
+      if (!s->session || !s->trans || rdps_thread_ending ())
+        return -1;
+      if (plat_screen (&again) != NULL)
+        {
+          session_end (s, "the screen mode changed");
+          return -1;
+        }
+      if (same_mode (&cur, &again))
+        break;
+      cur = again;
+    }
+  fmt = pix_format_of (cur.log2bpp, cur.ncolour, cur.modeflags);
+  if (fmt == PIX_UNSUPPORTED)
+    {
+      session_end (s, "the screen mode changed to one that can't be shared "
+                   "(use 16 or 32 bpp: thousands or millions of colours)");
+      return -1;
+    }
+  cap_free (&s->cap);
+  s->scr = cur;
+  s->fmt = fmt;
+  g_rdps_desktop_width = cur.width;
+  g_rdps_desktop_height = cur.height;
+  ci->display_sizes.session_width = cur.width;
+  ci->display_sizes.session_height = cur.height;
+  ci->display_sizes.monitorCount = 0;   /* one screen, the new size */
+  if (cap_init (&s->cap, cur.width, cur.height, pix_bytes (fmt)) != 0)
+    {
+      session_end (s, "out of memory for the new screen size");
+      return -1;
+    }
+  if (libxrdp_reset (s->session) != 0)
+    {
+      session_end (s, "the screen mode changed, and resizing the client failed");
+      return -1;
+    }
+  /* Nothing is sent while the client is reactivating (libxrdp sets the
+     suppress-output mask until the client's font list comes); then
+     everything (callback 0x5559). */
+  s->resize_deadline = plat_time_cs () + HANDSHAKE_CS;
+  cap_scan (&s->cap, s->scr.base, s->scr.stride, s->scr.height);
+  cap_mark_all (&s->cap);
+  s->last_activity = plat_time_cs ();
+  say ("the screen mode changed: the client's desktop is now %d x %d", cur.width,
+       cur.height);
+  return 0;
+}
+
 /* The time between scans of the whole screen: quicker while things are
    happening, slower when the screen has been still for a while. */
 static unsigned
@@ -790,21 +896,37 @@ step (unsigned max_wait_cs)
   /* While the client hasn't taken what we sent, don't send more: the
      changes wait as dirty tiles, so a slow link gets fewer, later frames
      rather than an ever-growing queue. */
+  /* While the client is reactivating after a resize, or has asked for no
+     updates (minimised: Suppress Output), send nothing. */
+  if (s->was_up && s->session->client_info->suppress_output_mask)
+    {
+      if (s->resize_deadline && (int) (now - s->resize_deadline) >= 0)
+        {
+          session_end (s, "the client didn't come back after the resize");
+          return 0;
+        }
+      return 2;
+    }
+  s->resize_deadline = 0;
   if (s->was_up && s->trans->wait_s == NULL && (int) (now - s->next_scan) >= 0)
     {
       rdps_screen cur;
       unsigned period = scan_period (s, now);
       int band, h = s->scr.height;
       /* A mode change moves or resizes the screen: stop reading the old
-         one. The client can connect again to get the new size. */
-      if (plat_screen (&cur) != NULL || cur.base != s->scr.base
+         one, and give the client the new size (or end the session). */
+      if (plat_screen (&cur) != NULL
           || cur.width != s->scr.width || cur.height != s->scr.height
           || cur.log2bpp != s->scr.log2bpp || cur.stride != s->scr.stride
           || pix_format_of (cur.log2bpp, cur.ncolour, cur.modeflags) != s->fmt)
         {
-          session_end (s, "the screen mode changed");
+          screen_resized (s);
           return 0;
         }
+      /* Only the displayed bank moved (a program double-buffering swaps
+         banks with OS_Byte 113; 0.2-test2 took that for a mode change and
+         ended the session): read the bank that's shown now. */
+      s->scr.base = cur.base;
       /* The screen is read in bands, so no one scan holds the machine up
          for long: a band every period * band / height. */
       band = s->opt->rows_per_scan > 0 ? s->opt->rows_per_scan : h;
@@ -837,7 +959,7 @@ int
 server_step (unsigned max_wait_cs)
 {
   server *s = &srv;
-  unsigned t0 = plat_time_cs (), t;
+  unsigned t0 = plat_time_cs (), t, y0 = rdps_yielded_cs;
   int r, held;
 
   /* How long other programs had the machine since the last step. With -v,
@@ -857,8 +979,9 @@ server_step (unsigned max_wait_cs)
   t = plat_time_cs ();
   s->last_step_end = t;
   s->steps++;
-  if (t - t0 > s->step_cs_max)
-    s->step_cs_max = t - t0;
+  /* the time it held the machine: not the waits in it (srvthread.h) */
+  if (t - t0 - (rdps_yielded_cs - y0) > s->step_cs_max)
+    s->step_cs_max = t - t0 - (rdps_yielded_cs - y0);
   if (s->stats_at == 0)
     s->stats_at = t + 500;
   else if ((int) (t - s->stats_at) >= 0)

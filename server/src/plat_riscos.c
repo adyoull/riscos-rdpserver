@@ -187,12 +187,74 @@ plat_wheel (int dz, int dw)
   _swix (OS_CallAVector, _INR (0, 3) | _IN (9), 9, dz, 0, dw, PointerV);
 }
 
+/* Hardware overlays (VideoOverlay: Reel's video, EGL programs' windows)
+   never reach screen memory, so a client sees a black hole where they
+   are. Reel and riscos-mesa's EGL read EGL$Overlay at every frame and
+   plot ordinarily while it's "off", so it's set to "off" while a client
+   is connected, and what was there before (if anything) is put back
+   when the client goes, unless something else changed it meanwhile.
+   OS_ReadVarVal without R4 = 3 gives the value unexpanded with its
+   type (PRM p465). A string is put back as type 4 (literal): type 0
+   would GSTrans it a second time (OS_SetVarVal, p489). A number is 4
+   bytes, so the buffer is word aligned. A value that can't be read (too
+   long, say) is left alone. */
+static int ovl_saved;           /* 1 while EGL$Overlay is ours */
+static int ovl_had;             /* it existed before */
+static int ovl_type;
+static int ovl_len;
+static int ovl_val[64];         /* 256 bytes, word aligned */
+
+#define ERR_VAR_NOT_FOUND 0x124 /* "System variable not found" */
+
+/* 1 read, 0 unset, -1 there but unreadable here */
+static int
+ovl_read (void *buf, int size, int *len, int *type)
+{
+  int l = -1, t = 0;
+  _kernel_oserror *e = _swix (OS_ReadVarVal, _INR (0, 4) | _OUT (2) | _OUT (4),
+                              "EGL$Overlay", buf, size, 0, 0, &l, &t);
+  if (e != NULL)
+    return (e->errnum & 0xFFFFFF) == ERR_VAR_NOT_FOUND ? 0 : -1;
+  if (l < 0 || l > size)
+    return -1;
+  *len = l;
+  *type = t;
+  return 1;
+}
+
+static void
+overlays_off (int off)
+{
+  if (off && !ovl_saved)
+    {
+      ovl_had = ovl_read (ovl_val, sizeof ovl_val, &ovl_len, &ovl_type);
+      if (ovl_had < 0 || (ovl_had && ovl_type == 16))
+        return;                 /* unreadable, or a code variable: not ours to touch */
+      _swix (OS_SetVarVal, _INR (0, 4), "EGL$Overlay", "off", 3, 0, 4);
+      ovl_saved = 1;
+    }
+  else if (!off && ovl_saved)
+    {
+      int cur[2], len, type;
+      ovl_saved = 0;
+      if (ovl_read (cur, sizeof cur, &len, &type) != 1 || type != 0 || len != 3
+          || memcmp (cur, "off", 3) != 0)
+        return;                 /* changed by someone else meanwhile */
+      if (ovl_had)
+        _swix (OS_SetVarVal, _INR (0, 4), "EGL$Overlay", ovl_val, ovl_len, 0,
+               ovl_type == 0 ? 4 : ovl_type);
+      else
+        _swix (OS_SetVarVal, _INR (0, 4), "EGL$Overlay", "", -1, 0, 0);
+    }
+}
+
 void
 plat_set_clients (int n)
 {
   char v[12];
   int len = sprintf (v, "%d", n);
   _swix (OS_SetVarVal, _INR (0, 4), "RDPServer$Clients", v, len, 0, 0);
+  overlays_off (n > 0);
 }
 
 unsigned

@@ -65,6 +65,42 @@ plat_screen (rdps_screen *s)
       if (!screen)
         return "no memory for the fake screen";
     }
+  {
+    /* A pretend mode change, for tests: RDPS_HOST_MODE_FILE names a file
+       holding "WxH"; when it appears the screen takes that size (at a new
+       address, as a real mode change moves it) and the file is removed. */
+    const char *mf = getenv ("RDPS_HOST_MODE_FILE");
+    FILE *f = mf ? fopen (mf, "r") : NULL;
+    if (f)
+      {
+        int w = 0, h = 0;
+        unsigned char *n;
+        char word[8] = "";
+        long at0 = ftell (f);
+        /* "bank": the same mode, another screen bank shown (OS_Byte 113) */
+        if (fscanf (f, "%7s", word) == 1 && strcmp (word, "bank") == 0)
+          {
+            n = malloc ((size_t) sw * sh * 4);
+            if (n)
+              {
+                memcpy (n, screen, (size_t) sw * sh * 4);
+                free (screen);
+                screen = n;
+              }
+          }
+        else if (fseek (f, at0, SEEK_SET) == 0 && fscanf (f, "%dx%d", &w, &h) == 2 && w >= 64 && h >= 64 && w <= 4096 && h <= 4096
+            && (n = malloc ((size_t) w * h * 4)) != NULL)
+          {
+            free (screen);
+            screen = n;
+            sw = w;
+            sh = h;
+            square_at = -1;
+          }
+        fclose (f);
+        remove (mf);
+      }
+  }
   at = getenv ("RDPS_HOST_STILL") ? 0 : (int) ((plat_time_cs () / 100) % (unsigned) (sw / 64));
   if (at != square_at)
     {

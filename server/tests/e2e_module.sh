@@ -67,6 +67,7 @@ rdesktop -u test -p x -a 32 -N localhost:$PORT >"$OUT/rdesktop-32.log" 2>&1 & CP
 wait_for ups 1 60 && ok "rdesktop (32 bpp) connected" || bad "rdesktop didn't come up"
 sleep 3; shot rdesktop-32; quarters rdesktop-32
 grep -q "^clients 1$" "$OUT/input.log" && ok "RDPServer\$Clients set" || bad "RDPServer\$Clients not set"
+grep -A1 "^clients 1$" "$OUT/input.log" | grep -q "^overlay off$" && ok "EGL\$Overlay off while a client is connected" || bad "EGL\$Overlay not off with a client"
 : >"$OUT/input.log"
 xdotool mousemove 200 150 click 1 >/dev/null 2>&1; sleep 1
 xdotool key a >/dev/null 2>&1; sleep 1
@@ -97,6 +98,7 @@ for i in $(seq 1 20); do kill -0 $CPID 2>/dev/null || break; sleep 0.5; done
 kill -0 $CPID 2>/dev/null && { bad "rdesktop still connected"; kill $CPID; } || ok "rdesktop saw the connection close"
 wait $CPID 2>/dev/null
 grep -q "^clients 0$" "$OUT/input.log" && ok "RDPServer\$Clients back to 0" || bad "RDPServer\$Clients not cleared"
+grep -A1 "^clients 0$" "$OUT/input.log" | grep -q "^overlay on$" && ok "EGL\$Overlay put back to the user's 'on'" || bad "EGL\$Overlay not put back"
 
 # --- 4: Disconnect, mid-handshake ----------------------------------------
 exec 3<>/dev/tcp/127.0.0.1/$PORT; printf '\x03' >&3
@@ -122,6 +124,23 @@ expect freerdp-errorbox 320,240 255,0,255 "the error box"
 xdotool mousemove 330 250 click 1 >/dev/null 2>&1
 for i in $(seq 1 20); do [ "$(grep -c "error box closed by a click" "$OUT/server.log")" -ge 2 ] && break; sleep 0.5; done
 [ "$(grep -c "error box closed by a click" "$OUT/server.log")" -ge 2 ] && ok "FreeRDP's click closed it" || bad "FreeRDP's click didn't arrive"
+# another screen bank shown (double-buffering): not a mode change
+g=$(gones)
+ctl bank
+sleep 3
+[ "$(gones)" -eq "$g" ] && ! grep -q "desktop is now" "$OUT/server.log" \
+  && ok "a screen bank swap isn't taken for a mode change" || bad "a bank swap ended or resized the session"
+# a mode change while FreeRDP watches: the client is resized, carries on
+ctl "mode 800x600"
+for i in $(seq 1 30); do grep -q "desktop is now 800 x 600" "$OUT/server.log" && break; sleep 0.5; done
+sleep 4; shot freerdp-resized
+grep -q "the client's desktop is now 800 x 600" "$OUT/server.log" && ok "mode change: the client resized to 800 x 600" || bad "no resize"
+expect freerdp-resized 700,550 128,128,128 "the new screen's grey"
+expect freerdp-resized 100,400 0,0,255 "blue"
+[ "$(gones)" -eq "$g" ] && ok "the session carried on through the mode change" || bad "the session ended at the mode change"
+ctl "mode 640x480"
+for i in $(seq 1 30); do grep -q "desktop is now 640 x 480" "$OUT/server.log" && break; sleep 0.5; done
+grep -q "the client's desktop is now 640 x 480" "$OUT/server.log" && ok "and back" || bad "no resize back"
 kill $CPID 2>/dev/null; wait $CPID 2>/dev/null
 
 # --- 6: a wrong password --------------------------------------------------

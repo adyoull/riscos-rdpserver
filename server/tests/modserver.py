@@ -14,6 +14,7 @@ commands written to OUTDIR/ctl (one per line, read as they appear):
               only the error box loop's OS_Byte &81 through ByteV, until
               the mouse's Select button goes down (a click from the client);
               then the box goes, Service_WimpReportError 0
+  mode WxH    a pretend mode change (new size, the screen moves)
   disconnect  the front end's Disconnect (drops the client at once)
   stop        stop and exit
 
@@ -45,6 +46,7 @@ def say(text):
 
 
 m = RiscOS(MOD, base=RMA + 0x2468 * 4)
+m.vars["EGL$Overlay"] = "on"          # the user's own setting, to be put back
 err = m.init()
 if err:
     say("init failed: %s" % err)
@@ -119,7 +121,7 @@ try:
             slowest_in_box = max(slowest_in_box, took)
         # what the server did to "RISC OS"
         for x, y in m.mouse[mouse_seen:]:
-            inp.write("mouse %d %d\n" % (x >> 1, SH - 1 - (y >> 1)))
+            inp.write("mouse %d %d\n" % (x >> 1, m.sh - 1 - (y >> 1)))
         mouse_seen = len(m.mouse)
         for down, k in m.keyv[keys_seen:]:
             inp.write("key %02X %s\n" % (k, "down" if down else "up"))
@@ -138,6 +140,7 @@ try:
         c = m.vars.get("RDPServer$Clients")
         if c != clients and c is not None:
             inp.write("clients %s\n" % c)
+            inp.write("overlay %s\n" % m.vars.get("EGL$Overlay", "(unset)"))
             clients = c
         if t >= next_front:
             # the front end's poll: messages, and commands
@@ -152,6 +155,11 @@ try:
                         m.service(1, 0x57)
                         m.errorbox = True
                         box_open_at = time.monotonic()
+                    elif cmd == "bank":
+                        m.swap_bank()
+                    elif cmd.startswith("mode "):
+                        w, h = (int(v) for v in cmd[5:].split("x"))
+                        m.set_mode(w, h)
                     elif cmd == "disconnect":
                         t0 = time.monotonic()
                         m.entry(DISCONNECT)

@@ -62,7 +62,6 @@ static const _kernel_oserror *remove_ev (int swi, int r[10])
 static unsigned char last21[5];
 static int keyv_r0, keyv_r1, keyv_calls;
 static int ptrv_r[4], ptrv_calls;
-static char var_name[64], var_val[16];
 
 static const _kernel_oserror *vdu (int swi, int r[10])
 {
@@ -97,11 +96,83 @@ static const _kernel_oserror *word (int swi, int r[10])
   return NULL;
 }
 
+/* System variables (PRM p465, p489): types 0 (GSTrans isn't done here,
+   but the type used is recorded), 1, 2 and 4 (stored as a string, 0). */
+#define NVARS 4
+static struct { char name[40], val[400]; int len, type, set; } vars[NVARS];
+static int last_set_type = -1;
+static int var_find (const char *name, int make)
+{
+  int i, free_i = -1;
+  for (i = 0; i < NVARS; i++)
+    if (vars[i].set && strcmp (vars[i].name, name) == 0)
+      return i;
+    else if (!vars[i].set && free_i < 0)
+      free_i = i;
+  if (!make || free_i < 0)
+    {
+      if (make)
+        abort ();
+      return -1;
+    }
+  snprintf (vars[free_i].name, sizeof vars[free_i].name, "%s", name);
+  vars[free_i].set = 1;
+  return free_i;
+}
+static const char *var_get (const char *name)
+{
+  int i = var_find (name, 0);
+  return i < 0 ? NULL : vars[i].val;
+}
+static const _kernel_oserror *setvarval (int swi, int r[10]);
+static void var_put (const char *name, const char *v, int type)
+{
+  int r[10] = { (intptr_t) name, (intptr_t) v, (int) strlen (v), 0, type };
+  setvarval (0, r);
+}
+static const _kernel_oserror var_missing = { 0x124, "System variable not found" };
+static const _kernel_oserror var_overflow = { 0x1E4, "Buffer overflow" };
 static const _kernel_oserror *setvarval (int swi, int r[10])
 {
+  const char *name = (const char *) (intptr_t) r[0];
+  int i;
   (void) swi;
-  snprintf (var_name, sizeof var_name, "%s", (const char *) (intptr_t) r[0]);
-  snprintf (var_val, sizeof var_val, "%.*s", r[2], (const char *) (intptr_t) r[1]);
+  if (r[2] < 0)
+    {
+      if ((i = var_find (name, 0)) < 0)
+        return &var_missing;
+      vars[i].set = 0;
+      return NULL;
+    }
+  if (r[4] != 0 && r[4] != 1 && r[4] != 2 && r[4] != 4)
+    abort ();
+  if (r[2] >= (int) sizeof vars[0].val)
+    abort ();
+  last_set_type = r[4];
+  i = var_find (name, 1);
+  memcpy (vars[i].val, (const char *) (intptr_t) r[1], (size_t) r[2]);
+  vars[i].val[r[2]] = 0;
+  vars[i].len = r[2];
+  vars[i].type = r[4] == 4 ? 0 : r[4];
+  return NULL;
+}
+static const _kernel_oserror *readvarval (int swi, int r[10])
+{
+  int i = var_find ((const char *) (intptr_t) r[0], 0);
+  (void) swi;
+  if (r[3] != 0 || r[4] == 3 || i < 0)
+    {
+      r[2] = 0;
+      return &var_missing;
+    }
+  if (vars[i].len > r[2])
+    {
+      r[2] = ~vars[i].len;
+      return &var_overflow;
+    }
+  memcpy ((char *) (intptr_t) r[1], vars[i].val, (size_t) vars[i].len);
+  r[2] = vars[i].len;
+  r[4] = vars[i].type;
   return NULL;
 }
 
@@ -203,6 +274,7 @@ int main (void)
   fake_swi (OS_Word, "OS_Word", word);
   fake_swi (OS_CallAVector, "OS_CallAVector", callavector);
   fake_swi (OS_SetVarVal, "OS_SetVarVal", setvarval);
+  fake_swi (OS_ReadVarVal, "OS_ReadVarVal", readvarval);
   fake_swi (OS_Byte, "OS_Byte", byte);
   fake_swi (OS_Module, "OS_Module", module);
   fake_swi (OS_SynchroniseCodeAreas, "OS_SynchroniseCodeAreas", sync_code);
@@ -246,10 +318,50 @@ int main (void)
   held[2] = 0;
 
   plat_set_clients (1);
-  CHECK (strcmp (var_name, "RDPServer$Clients") == 0 && strcmp (var_val, "1") == 0,
+  CHECK (var_get ("RDPServer$Clients") && strcmp (var_get ("RDPServer$Clients"), "1") == 0,
          "RDPServer$Clients set to 1");
+  CHECK (var_get ("EGL$Overlay") && strcmp (var_get ("EGL$Overlay"), "off") == 0,
+         "EGL$Overlay off while a client is connected (it was unset)");
   plat_set_clients (0);
-  CHECK (strcmp (var_val, "0") == 0, "and back to 0");
+  CHECK (strcmp (var_get ("RDPServer$Clients"), "0") == 0, "and back to 0");
+  CHECK (var_get ("EGL$Overlay") == NULL, "EGL$Overlay unset again");
+
+  var_put ("EGL$Overlay", "on", 0);
+  plat_set_clients (1);
+  plat_set_clients (1);
+  CHECK (strcmp (var_get ("EGL$Overlay"), "off") == 0, "the user's EGL$Overlay on: off with a client");
+  plat_set_clients (0);
+  CHECK (strcmp (var_get ("EGL$Overlay"), "on") == 0, "and their 'on' put back (a second 1 didn't lose it)");
+
+  plat_set_clients (1);
+  var_put ("EGL$Overlay", "yes", 0);
+  plat_set_clients (0);
+  CHECK (strcmp (var_get ("EGL$Overlay"), "yes") == 0,
+         "EGL$Overlay changed while a client was connected: left as it was changed");
+
+  var_put ("EGL$Overlay", "<x|y>", 4);
+  plat_set_clients (1);
+  plat_set_clients (0);
+  CHECK (strcmp (var_get ("EGL$Overlay"), "<x|y>") == 0 && last_set_type == 4,
+         "a string is put back literally (type 4, not GSTrans'd again)");
+
+  var_put ("EGL$Overlay", "<Obey$Dir>", 2);
+  plat_set_clients (1);
+  plat_set_clients (0);
+  CHECK (strcmp (var_get ("EGL$Overlay"), "<Obey$Dir>") == 0 && last_set_type == 2,
+         "a macro is put back as a macro");
+
+  {
+    char big[301];
+    memset (big, 'a', 300);
+    big[300] = 0;
+    var_put ("EGL$Overlay", big, 0);
+    plat_set_clients (1);
+    CHECK (strcmp (var_get ("EGL$Overlay"), big) == 0,
+           "a value too long to keep is left alone (not set to off)");
+    plat_set_clients (0);
+    CHECK (strcmp (var_get ("EGL$Overlay"), big) == 0, "nor deleted afterwards");
+  }
 
   CHECK (strcmp (plat_resources_dir (), "<RDPServer$Dir>") == 0, "resources in the app");
   CHECK (strcmp (plat_choices_dir (), "<RDPServer$Choices>") == 0, "keys in Choices");

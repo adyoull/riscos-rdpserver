@@ -26,7 +26,8 @@ DISP=${DISP:-:97}
 rm -rf "$OUT"; mkdir -p "$OUT"
 export RDPS_RESOURCES="$PWD/app/!RDPServer" RDPS_CHOICES="$OUT" \
        RDPS_HOST_INPUT_LOG="$OUT/input.log" RDPS_HOST_STILL=1 DISPLAY=$DISP \
-       RDPS_HOST_STUCK_SHIFT=1   # as the Pi had with test2: see below
+       RDPS_HOST_STUCK_SHIFT=1 \
+       RDPS_HOST_MODE_FILE="$OUT/mode"   # a pretend mode change: see the end
 fails=0
 ok () { echo "ok   $1"; }
 bad () { echo "FAIL $1"; fails=$((fails + 1)); }
@@ -158,10 +159,36 @@ exec 3>&-
 grep -q "too slow connecting" "$OUT/server.log" && ok "a silent client is dropped" || bad "a silent client wasn't dropped"
 run_client rdesktop-after rdesktop -u test -p x -a 32 -N localhost:$PORT
 
+# A mode change while FreeRDP is connected: the client's desktop takes the
+# new size (deactivation-reactivation) and the session carries on.
+before_gone=$(grep -c "client gone" "$OUT/server.log")
+xfreerdp3 /v:localhost:$PORT /u:test /p:x /sec:rdp /cert:ignore /bpp:32 >"$OUT/freerdp-resize.log" 2>&1 & CPID=$!
+for i in $(seq 1 30); do [ "$(grep -c "client up" "$OUT/server.log")" -ge 10 ] && break; sleep 1; done
+sleep 3
+# Another screen bank shown (a program double-buffering): not a mode change.
+echo bank >"$OUT/mode"
+sleep 3
+[ "$(grep -c "client gone" "$OUT/server.log")" -eq "$before_gone" ] && ! grep -q "desktop is now" "$OUT/server.log" \
+  && ok "a screen bank swap isn't taken for a mode change" || bad "a bank swap ended or resized the session"
+echo 800x600 >"$OUT/mode"
+for i in $(seq 1 20); do grep -q "desktop is now 800 x 600" "$OUT/server.log" && break; sleep 0.5; done
+sleep 4
+grep -q "the client's desktop is now 800 x 600" "$OUT/server.log" && ok "mode change: the client is resized to 800 x 600" || bad "no resize: $(grep -i 'mode' "$OUT/server.log" | tail -2)"
+import -window root "$OUT/resized.png" 2>/dev/null
+p=$(pixel "$OUT/resized.png" 700 550); near "$p" 128,128,128 && ok "resized: the new screen's grey at 700,550" || bad "resized: 700,550 is $p"
+p=$(pixel "$OUT/resized.png" 100 400); near "$p" 0,0,255 && ok "resized: blue at 100,400" || bad "resized: 100,400 is $p"
+[ "$(grep -c "client gone" "$OUT/server.log")" -eq "$before_gone" ] && kill -0 $CPID 2>/dev/null \
+  && ok "and the session carried on" || bad "the session ended at the mode change"
+echo 640x480 >"$OUT/mode"
+for i in $(seq 1 20); do grep -q "desktop is now 640 x 480" "$OUT/server.log" && break; sleep 0.5; done
+grep -q "the client's desktop is now 640 x 480" "$OUT/server.log" && ok "and back to 640 x 480" || bad "no resize back"
+kill $CPID 2>/dev/null; wait $CPID 2>/dev/null
+for i in $(seq 1 10); do [ "$(grep -c "client gone" "$OUT/server.log")" -gt "$before_gone" ] && break; sleep 1; done
+
 kill -INT $SPID; wait $SPID; status=$?
 [ $status -ne 135 ] && [ $status -ne 132 ] && ok "no alignment or VFPv4 trap (exit $status)" || bad "trapped: exit $status"
 grep -q "stopped" "$OUT/server.log" && ok "server stopped cleanly" || bad "server didn't stop cleanly"
 n=$(grep -c "client up" "$OUT/server.log")
-[ "$n" -eq 9 ] && ok "9 sessions" || bad "$n sessions came up, not 9"
+[ "$n" -eq 10 ] && ok "10 sessions" || bad "$n sessions came up, not 10"
 echo "e2e: $fails failed"
 [ $fails -eq 0 ]
