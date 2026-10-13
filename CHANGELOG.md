@@ -1,5 +1,15 @@
 # Changelog
 
+## RDPServer 0.1-test6 (13 October 2026)
+
+- Double-clicks work (test5 on the Pi), but a click on some title bars
+  (!Folio's) left the button down: the window followed the pointer and
+  the desktop stopped until the next real click. test5's ticker event only
+  added a callback to do the release, and callbacks wait for a return to
+  user mode, which never comes while the Wimp's own loop runs. Now the
+  ticker event calls KeyV itself, as mouse and keyboard drivers do from
+  their interrupt handlers.
+
 ## RDPServer 0.1-test5 (13 October 2026)
 
 - test4 broke clicks altogether: pressing and releasing the button in the

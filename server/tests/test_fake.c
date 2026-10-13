@@ -9,10 +9,10 @@
 #include "../src/platform.h"
 
 /* Stand-ins for clickup.s's routines (ARM code; tests/test_clickup.py
-   runs the real ones): 20 bytes of ticker routine, 40 of callback. */
-__asm__ (".data\n.globl rdps_clickup_ticker\n.globl rdps_clickup_callback\n"
-         ".globl rdps_clickup_end\nrdps_clickup_ticker: .fill 20,1,0xA1\n"
-         "rdps_clickup_callback: .fill 40,1,0xA2\nrdps_clickup_end:\n.text");
+   runs the real ones): 36 bytes of ticker routine. */
+__asm__ (".data\n.globl rdps_clickup_ticker\n"
+         ".globl rdps_clickup_end\nrdps_clickup_ticker: .fill 36,1,0xA1\n"
+         "rdps_clickup_end:\n.text");
 extern const unsigned char rdps_clickup_ticker[];
 
 static unsigned char screen[16];
@@ -152,12 +152,12 @@ static void test_clicks (void)
   int calls, *slot;
   calls = keyv_calls;
   CHECK (plat_click (0x70, 2) == 0, "a click");
-  CHECK (rma_block && rma_size >= 60 + 24, "an RMA block for the routines and 3 pairs");
-  CHECK (memcmp (rma_block, rdps_clickup_ticker, 60) == 0, "the routines copied into it");
+  CHECK (rma_block && rma_size >= 36 + 24, "an RMA block for the routines and 3 pairs");
+  CHECK (memcmp (rma_block, rdps_clickup_ticker, 36) == 0, "the routines copied into it");
   CHECK (sync_r[0] == 1 && sync_r[1] == (int) (intptr_t) rma_block
-         && sync_r[2] == (int) (intptr_t) rma_block + 59, "OS_SynchroniseCodeAreas over the new code");
+         && sync_r[2] == (int) (intptr_t) rma_block + 35, "OS_SynchroniseCodeAreas over the new code");
   CHECK (keyv_calls == calls + 1 && keyv_r0 == 2 && keyv_r1 == 0x70, "KeyV: Select down now");
-  slot = (int *) (rma_block + 60);
+  slot = (int *) (rma_block + 36);
   CHECK (callafter_r[0] == 2 && callafter_r[1] == (int) (intptr_t) rma_block
          && callafter_r[2] == (int) (intptr_t) slot, "OS_CallAfter 2 cs: the ticker routine, R12 = its pair");
   CHECK (slot[0] == 0x70 && slot[1] == 1, "the pair: key &70, pending");
@@ -171,11 +171,11 @@ static void test_clicks (void)
   CHECK (callafter_r[2] == (int) (intptr_t) (slot + 4) && slot[4] == 0x72, "Adjust has its own pair");
   calls = keyv_calls;
   slot[1] = 0;
+  remove_calls = 0;
   plat_click_finish ();
   CHECK (removed_ticker[0] == (int) (intptr_t) rma_block && removed_ticker[1] == (int) (intptr_t) (slot + 4),
          "stopping: the waiting ticker event is removed");
-  CHECK (removed_callback[0] == (int) (intptr_t) rma_block + 20 && removed_callback[1] == (int) (intptr_t) (slot + 4),
-         "and its callback");
+  CHECK (remove_calls == 1, "(only the ticker event: there's no callback)");
   CHECK (keyv_calls == calls + 1 && keyv_r0 == 1 && keyv_r1 == 0x72, "and Adjust let go of now");
   CHECK (rma_freed, "then the RMA block is freed");
 

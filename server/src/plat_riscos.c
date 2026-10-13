@@ -67,15 +67,13 @@ plat_key (int low_level_key, int down)
 /* Clicks (see clickup.s): the routines are copied into an RMA block, with
    a { key, pending } pair for each mouse button after them. OS_Module 6/7
    (claim/free RMA), OS_SynchroniseCodeAreas 1 (new code), OS_CallAfter
-   (p289), OS_RemoveTickerEvent and OS_RemoveCallBack (p468). */
-extern const unsigned char rdps_clickup_ticker[], rdps_clickup_callback[],
-  rdps_clickup_end[];
+   (p289), OS_RemoveTickerEvent (p468). */
+extern const unsigned char rdps_clickup_ticker[], rdps_clickup_end[];
 
 static int *clickup;                    /* the RMA block (word-aligned) */
 static int clickup_failed;
 
 #define CODE_BYTES ((size_t) (rdps_clickup_end - rdps_clickup_ticker))
-#define CALLBACK_AT ((size_t) (rdps_clickup_callback - rdps_clickup_ticker))
 
 static volatile int *
 click_slot (int ll)
@@ -114,7 +112,6 @@ click_cancel (int ll)
   if (!slot[1])
     return;
   _swix (OS_RemoveTickerEvent, _INR (0, 1), clickup, slot);
-  _swix (OS_RemoveCallBack, _INR (0, 1), (const char *) clickup + CALLBACK_AT, slot);
   if (slot[1])
     {
       slot[1] = 0;
