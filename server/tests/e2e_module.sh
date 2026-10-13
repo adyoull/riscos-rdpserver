@@ -98,7 +98,7 @@ for i in $(seq 1 20); do kill -0 $CPID 2>/dev/null || break; sleep 0.5; done
 kill -0 $CPID 2>/dev/null && { bad "rdesktop still connected"; kill $CPID; } || ok "rdesktop saw the connection close"
 wait $CPID 2>/dev/null
 grep -q "^clients 0$" "$OUT/input.log" && ok "RDPServer\$Clients back to 0" || bad "RDPServer\$Clients not cleared"
-grep -A1 "^clients 0$" "$OUT/input.log" | grep -q "^overlay on$" && ok "EGL\$Overlay put back to the user's 'on'" || bad "EGL\$Overlay not put back"
+grep -A1 "^clients 0$" "$OUT/input.log" | grep -q "^overlay (unset)$" && ok "EGL\$Overlay unset again, as it was" || bad "EGL\$Overlay not put back"
 
 # --- 4: Disconnect, mid-handshake ----------------------------------------
 exec 3<>/dev/tcp/127.0.0.1/$PORT; printf '\x03' >&3

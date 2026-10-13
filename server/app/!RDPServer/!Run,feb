@@ -17,8 +17,8 @@ RMEnsure CryptRandom 0.12 Error RDPServer needs the CryptRandom module (0.12 or 
 | The module: loaded here, removed again when RDPServer quits. Its memory
 | is a dynamic area, "RDPServer" (a 1920x1080 32 bpp screen needs about
 | 9 MB for the copy of the screen).
-RMEnsure RDPServer 0.04 RMLoad <RDPServer$Dir>.RDPSMod
-RMEnsure RDPServer 0.04 Error RDPServer's module (RDPSMod) didn't load.
+RMEnsure RDPServer 0.05 RMLoad <RDPServer$Dir>.RDPSMod
+RMEnsure RDPServer 0.05 Error RDPServer's module (RDPSMod) didn't load.
 | An icon on the icon bar (Select: Status, Adjust: Choices, Menu: Info,
 | Status, Choices, Disconnect, Quit).
 | Test builds pass -v: every mouse button and wheel event, and Shift, Ctrl

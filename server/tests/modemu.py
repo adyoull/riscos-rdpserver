@@ -463,8 +463,12 @@ class RiscOS:
             name = self.string(r[0])
             if r[3] != 0 or name not in self.vars:
                 r[2] = 0
-                return self.error(0x124, "System variable '%s' not found" % name)
+                # (the number is made up: the module mustn't rely on it)
+                return self.error(0x1E7, "System variable '%s' not found" % name)
             v = self.vars[name].encode("latin-1")
+            if r[2] & 0x80000000:          # length asked: NOT length, and an error
+                r[2] = ~len(v) & 0xFFFFFFFF
+                return self.error(0x1E4, "Buffer overflow")
             if len(v) > r[2]:
                 r[2] = ~len(v) & 0xFFFFFFFF
                 return self.error(0x1E4, "Buffer overflow")

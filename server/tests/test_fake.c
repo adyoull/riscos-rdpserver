@@ -130,7 +130,7 @@ static void var_put (const char *name, const char *v, int type)
   int r[10] = { (intptr_t) name, (intptr_t) v, (int) strlen (v), 0, type };
   setvarval (0, r);
 }
-static const _kernel_oserror var_missing = { 0x124, "System variable not found" };
+static const _kernel_oserror var_missing = { 0x1E7, "System variable not found (number made up)" };
 static const _kernel_oserror var_overflow = { 0x1E4, "Buffer overflow" };
 static const _kernel_oserror *setvarval (int swi, int r[10])
 {
@@ -160,6 +160,14 @@ static const _kernel_oserror *readvarval (int swi, int r[10])
 {
   int i = var_find ((const char *) (intptr_t) r[0], 0);
   (void) swi;
+  if (r[2] < 0)
+    {
+      /* RISC OS also gives an error here, which plat_riscos.c ignores
+         (it reads R2 whatever happens): the fake's _kernel_swi wouldn't
+         pass R2 back with one. */
+      r[2] = i < 0 ? 0 : ~vars[i].len;
+      return NULL;
+    }
   if (r[3] != 0 || r[4] == 3 || i < 0)
     {
       r[2] = 0;

@@ -204,18 +204,49 @@ static int ovl_type;
 static int ovl_len;
 static int ovl_val[64];         /* 256 bytes, word aligned */
 
-#define ERR_VAR_NOT_FOUND 0x124 /* "System variable not found" */
+/* Does EGL$Overlay exist? OS_ReadVarVal with R2 < 0 gives R2 = 0 if
+   not, else NOT its length, with an error either way (PRM p465), so R2
+   is read whatever the error, as UnixLib's __getenv_from_os does: no
+   error number is relied on. 0 unset, else the length. */
+static int
+ovl_length (void)
+{
+#if defined(__arm__)
+  register int r0 __asm__ ("r0") = (int) "EGL$Overlay";
+  register int r1 __asm__ ("r1") = 0;
+  register int r2 __asm__ ("r2") = -1;
+  register int r3 __asm__ ("r3") = 0;
+  register int r4 __asm__ ("r4") = 0;
+  __asm__ volatile ("swi %[n]"
+                    : "+r" (r0), "+r" (r1), "+r" (r2), "+r" (r3), "+r" (r4)
+                    : [n] "i" (0x20000 | OS_ReadVarVal)
+                    : "lr", "cc", "memory");
+  return r2 == 0 ? 0 : ~r2;
+#else
+  /* the host's fake RISC OS: its OS_ReadVarVal gives R2 without an error */
+  _kernel_swi_regs r;
+  r.r[0] = (int) "EGL$Overlay";
+  r.r[1] = 0;
+  r.r[2] = -1;
+  r.r[3] = 0;
+  r.r[4] = 0;
+  if (_kernel_swi (OS_ReadVarVal, &r, &r) != NULL)
+    return -1;
+  return r.r[2] == 0 ? 0 : ~r.r[2];
+#endif
+}
 
-/* 1 read, 0 unset, -1 there but unreadable here */
+/* 1 read, 0 unset, -1 there but unreadable here (too long) */
 static int
 ovl_read (void *buf, int size, int *len, int *type)
 {
-  int l = -1, t = 0;
-  _kernel_oserror *e = _swix (OS_ReadVarVal, _INR (0, 4) | _OUT (2) | _OUT (4),
-                              "EGL$Overlay", buf, size, 0, 0, &l, &t);
-  if (e != NULL)
-    return (e->errnum & 0xFFFFFF) == ERR_VAR_NOT_FOUND ? 0 : -1;
-  if (l < 0 || l > size)
+  int l = -1, t = 0, n = ovl_length ();
+  if (n == 0)
+    return 0;
+  if (n < 0 || n > size
+      || _swix (OS_ReadVarVal, _INR (0, 4) | _OUT (2) | _OUT (4),
+                "EGL$Overlay", buf, size, 0, 0, &l, &t) != NULL
+      || l < 0 || l > size)
     return -1;
   *len = l;
   *type = t;

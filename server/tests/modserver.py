@@ -46,7 +46,8 @@ def say(text):
 
 
 m = RiscOS(MOD, base=RMA + 0x2468 * 4)
-m.vars["EGL$Overlay"] = "on"          # the user's own setting, to be put back
+if os.environ.get("EMU_EGL_OVERLAY"):  # the user's own setting, to be put back
+    m.vars["EGL$Overlay"] = os.environ["EMU_EGL_OVERLAY"]
 err = m.init()
 if err:
     say("init failed: %s" % err)

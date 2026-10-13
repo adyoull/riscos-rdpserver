@@ -1,5 +1,18 @@
 # Changelog
 
+## RDPServer 0.2-test4 (13 October 2026)
+
+- 0.2-test3 never switched overlays off when EGL$Overlay was unset (as
+  it normally is), so Reel's video stayed black on the client while
+  playing (paused, Reel draws the frame itself, so that showed). It
+  told "unset" from "too long to read" by the error number of
+  OS_ReadVarVal, and had that number wrong. It now asks whether the
+  variable exists as UnixLib does (R2 = -1, R2 back is 0 if not),
+  relying on no error number; the tests' pretend RISC OS now gives a
+  made-up number, so nothing can lean on it again.
+- The module is 0.05.
+
+
 ## RDPServer 0.2-test3 (13 October 2026)
 
 - A session ended with "client gone (the screen mode changed)" when the
