@@ -35,7 +35,8 @@ Xvfb "$DISP" -screen 0 1024x768x24 >/dev/null 2>&1 & XPID=$!
 sleep 1
 # Clients must log in as test / x (the e2e clients do).
 $SRV -setlogin test x >"$OUT/setlogin.log" 2>&1 || { bad "-setlogin failed"; cat "$OUT/setlogin.log"; exit 1; }
-$SRV -p "$PORT" -t 400 -v >"$OUT/server.log" 2>&1 & SPID=$!
+# -g 2: a pause after each step, as on the desktop (Wimp_PollIdle).
+$SRV -p "$PORT" -t 400 -g 2 -v >"$OUT/server.log" 2>&1 & SPID=$!
 trap 'kill $SPID $XPID 2>/dev/null' EXIT
 # The first run makes the key.
 for i in $(seq 1 60); do grep -q listening "$OUT/server.log" && break; sleep 1; done
@@ -85,6 +86,12 @@ run_client () {  # name command...
     xdotool key a >/dev/null 2>&1; sleep 1
     xdotool click 4 >/dev/null 2>&1; sleep 1        # wheel up
     xdotool click 5 click 5 >/dev/null 2>&1; sleep 1  # wheel down twice
+    # A quick sweep of 150 moves: RISC OS's pointer must be at the end of
+    # it straight away, not replay the path (test3 on the Pi did).
+    for x in $(seq 101 250); do echo "mousemove $x 300"; done | xdotool - >/dev/null 2>&1
+    sleep 0.5
+    grep "^mouse" "$OUT/input.log" | tail -1 >"$OUT/sweep-end.txt"
+    sleep 1
     # A Shift-click the client means: Shift must stay down for it.
     xdotool keydown Shift_L >/dev/null 2>&1; sleep 1
     xdotool click 1 >/dev/null 2>&1; sleep 1
@@ -113,6 +120,9 @@ grep -q "^key 70 down$" "$OUT/input.log" && grep -q "^key 70 up$" "$OUT/input.lo
 # The move reaches RISC OS before the button goes down.
 awk '/^mouse 200 150$/ && !m {m=NR} /^key 70 down$/ && !d {d=NR} END {exit !(m && d && m < d)}' "$OUT/input.log" \
   && ok "the pointer moves before the button goes down" || bad "button before the move"
+[ "$(cat "$OUT/sweep-end.txt")" = "mouse 250 300" ] \
+  && ok "a quick sweep: the pointer is at its end within 0.5 s" \
+  || bad "pointer lagging: 0.5 s after the sweep it was at $(cat "$OUT/sweep-end.txt")"
 # RISC OS thought Shift was held (RDPS_HOST_STUCK_SHIFT): the server lets
 # go of it before the first click, but not before the Shift-click.
 awk '/^key 4C up$/ && !u {u=NR} /^key 70 down$/ && !d {d=NR} END {exit !(u && d && u < d)}' "$OUT/input.log" \

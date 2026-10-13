@@ -205,11 +205,16 @@ static void t_move (void *c, int x, int y) { (void) c; sprintf (trace + strlen (
 static void t_key (void *c, int ll, int d) { (void) c; sprintf (trace + strlen (trace), "k%02X%c ", ll, d ? 'd' : 'u'); }
 static void t_wheel (void *c, int dz, int dw) { (void) c; sprintf (trace + strlen (trace), "w%d,%d ", dz, dw); }
 
+static unsigned fake_clock, clock_reads;
+static unsigned t_now (void *c) { (void) c; clock_reads++; return ++fake_clock; }
+
 static void test_input (void)
 {
   inq q;
-  inq_sink k = { t_move, t_key, t_wheel, NULL };
+  inq_sink k = { t_move, t_key, t_wheel, NULL, NULL };
+  inq_sink kc = { t_move, t_key, t_wheel, t_now, NULL };
   unsigned t = 1000;
+  int i, left_down;
 
   /* A click as clients send it: move, down, up, all at once. */
   inq_init (&q);
@@ -227,6 +232,64 @@ static void test_input (void)
   CHECK (strcmp (trace, "m10,20 k70d ") == 0, "and stays down a moment");
   CHECK (inq_run (&q, t + INQ_AFTER_MOVE_CS + INQ_BETWEEN_CS, &k) == 0, "then comes up");
   CHECK (strcmp (trace, "m10,20 k70d k70u ") == 0, "down then up, in order");
+
+  /* A double-click: the button must never be left down when inq_run
+     returns (the Filer would take it as double-click-and-hold, that is
+     Shift). With a clock, the down-up gap is waited out inside. */
+  inq_init (&q);
+  trace[0] = 0;
+  inq_move (&q, 10, 20);
+  inq_key (&q, 0x70, 1); inq_key (&q, 0x70, 0);
+  inq_key (&q, 0x70, 1); inq_key (&q, 0x70, 0);
+  left_down = 0;
+  for (i = 0; i < 20 && q.count > 0; i++)
+    {
+      fake_clock = t + 2 * (unsigned) i;
+      inq_run (&q, fake_clock, &kc);
+      if (q.applied[0x70])
+        left_down = 1;
+    }
+  CHECK (strcmp (trace, "m10,20 k70d k70u k70d k70u ") == 0, "double-click: both clicks, in order");
+  CHECK (!left_down, "the button is never left down between calls");
+  CHECK (clock_reads > 0, "the gap is waited out with the clock");
+
+  /* A down whose up hasn't arrived yet waits for it. */
+  inq_init (&q);
+  trace[0] = 0;
+  inq_move (&q, 10, 20);
+  inq_run (&q, t, &kc);
+  inq_key (&q, 0x70, 1);
+  inq_run (&q, t + 10, &kc);
+  inq_run (&q, t + 20, &kc);
+  CHECK (strcmp (trace, "m10,20 ") == 0, "a down without its up waits");
+  inq_move (&q, 12, 21);              /* a wobble, not a drag */
+  inq_run (&q, t + 30, &kc);
+  CHECK (strcmp (trace, "m10,20 ") == 0, "a 2-pixel wobble doesn't end the wait");
+  inq_key (&q, 0x70, 0);
+  fake_clock = t + 31;
+  inq_run (&q, t + 31, &kc);
+  CHECK (strcmp (trace, "m10,20 k70d m12,21 k70u ") == 0, "its up arrives: both go in one call");
+  CHECK (!q.applied[0x70], "and nothing is left down");
+
+  /* Held: after INQ_HOLD_CS the down goes on its own. */
+  inq_init (&q);
+  trace[0] = 0;
+  inq_key (&q, 0x70, 1);
+  inq_run (&q, t, &kc);
+  inq_run (&q, t + INQ_HOLD_CS - 1, &kc);
+  CHECK (trace[0] == 0, "held: waits up to INQ_HOLD_CS");
+  inq_run (&q, t + INQ_HOLD_CS, &kc);
+  CHECK (strcmp (trace, "k70d ") == 0 && q.applied[0x70], "then goes down alone");
+
+  /* A drag: a down then a move away goes down at once. */
+  inq_init (&q);
+  trace[0] = 0;
+  inq_move (&q, 100, 100);
+  inq_run (&q, t, &kc);
+  inq_key (&q, 0x70, 1);
+  inq_move (&q, 120, 100);
+  inq_run (&q, t + 10, &kc);
+  CHECK (strcmp (trace, "m100,100 k70d m120,100 ") == 0, "a drag starts straight away");
 
   /* Moves in a row are merged; held keys aren't pressed twice. */
   inq_init (&q);
@@ -247,6 +310,7 @@ static void test_input (void)
   inq_key (&q, 0x4C, 1);
   inq_run (&q, 200, &k);
   inq_key (&q, 0x70, 1);           /* queued, not yet given to RISC OS */
+  inq_key (&q, 0x70, 0);
   inq_release_all (&q, &k);
   CHECK (strstr (trace, "k3Cu") && strstr (trace, "k4Cu") && !strstr (trace, "k70"),
          "pressed keys released; the queued button never pressed");

@@ -14,6 +14,7 @@
 #include <string.h>
 #include <sys/select.h>
 #include <sys/time.h>
+#include <unistd.h>
 
 #include "arch.h"
 #include "os_calls.h"
@@ -55,6 +56,8 @@ typedef struct
   unsigned tiles_sent;
   unsigned next_scan;              /* when the next band of rows is due */
   unsigned last_activity;          /* last change seen or input received */
+  unsigned steps, reads, most_reads; /* for -v's figures every 5 s */
+  unsigned step_cs_max, scans, stats_at;
   char client_desc[64];            /* "192.168.0.58:58303" */
   char client_user[64];
   int running;
@@ -164,6 +167,13 @@ sink_key (void *ctx, int ll, int down)
         say ("KeyV %s (a key)", down ? "down" : "up");
     }
   plat_key (ll, down);
+}
+
+static unsigned
+sink_now (void *ctx)
+{
+  (void) ctx;
+  return plat_time_cs ();
 }
 
 static void
@@ -540,6 +550,7 @@ server_start (const server_options *o)
   s->sink.move = sink_move;
   s->sink.key = sink_key;
   s->sink.wheel = sink_wheel;
+  s->sink.now = sink_now;
   s->sink.ctx = s;
   if (auth_load (o->logins, &s->logins) != 0)
     {
@@ -611,8 +622,8 @@ scan_period (server *s, unsigned now)
   return (int) (now - s->last_activity) < ACTIVE_CS ? active : idle;
 }
 
-int
-server_step (unsigned max_wait_cs)
+static int
+step (unsigned max_wait_cs)
 {
   server *s = &srv;
   fd_set rd, wr;
@@ -657,14 +668,33 @@ server_step (unsigned max_wait_cs)
     }
 
   /* Reads what has come in, and sends what's waiting
-     (trans_check_wait_objs ends with trans_send_waiting). */
+     (trans_check_wait_objs ends with trans_send_waiting). One call reads
+     only up to the next stage of a PDU (its first bytes, its length,
+     then the rest), so keep going while there's more: the desktop
+     version gets here only about every 2 cs, and a client sends a mouse
+     move every 1-2 cs. Moves in a row are merged by the input queue, so
+     only the last one reaches RISC OS. A time limit keeps the desktop
+     moving while a client floods us. */
   if (s->trans && (FD_ISSET ((int) s->trans->sck, &rd)
                    || (backlog && FD_ISSET ((int) s->trans->sck, &wr))))
-    if (trans_check_wait_objs (s->trans) != 0)
-      {
-        session_end (s, "disconnected");
-        return 0;
-      }
+    {
+      unsigned until = plat_time_cs () + 3;
+      int n = 0;
+      do
+        {
+          if (trans_check_wait_objs (s->trans) != 0)
+            {
+              session_end (s, "disconnected");
+              return 0;
+            }
+          n++;
+        }
+      while (n < 1000 && (int) (plat_time_cs () - until) < 0
+             && g_sck_can_recv ((int) s->trans->sck, 0));
+      s->reads += (unsigned) n;
+      if ((unsigned) n > s->most_reads)
+        s->most_reads = (unsigned) n;
+    }
   inq_run (&s->input, plat_time_cs (), &s->sink);
 
   if (s->trans && !s->was_up && s->handshake_deadline && is_term ())
@@ -722,6 +752,7 @@ server_step (unsigned max_wait_cs)
       band = s->opt->rows_per_scan > 0 ? s->opt->rows_per_scan : h;
       if (band > h)
         band = h;
+      s->scans++;
       if (cap_scan (&s->cap, s->scr.base, s->scr.stride, band) > 0)
         s->last_activity = now;
       send_dirty (s);
@@ -741,6 +772,32 @@ server_step (unsigned max_wait_cs)
       return d > 0 ? (d < 2 ? d : 2) : 0;   /* the socket every 2 cs at most */
     }
   return s->trans ? 2 : 25;
+}
+
+/* One step, timed; with -v, figures every 5 s while a client is there. */
+int
+server_step (unsigned max_wait_cs)
+{
+  server *s = &srv;
+  unsigned t0 = plat_time_cs (), t;
+  int r = step (max_wait_cs);
+
+  t = plat_time_cs ();
+  s->steps++;
+  if (t - t0 > s->step_cs_max)
+    s->step_cs_max = t - t0;
+  if (s->stats_at == 0)
+    s->stats_at = t + 500;
+  else if ((int) (t - s->stats_at) >= 0)
+    {
+      if (s->opt && s->opt->verbose && s->trans)
+        say ("last 5 s: %u steps, %u reads (most %u in one step), %u scans, "
+             "longest step %u cs, %u tiles sent in all", s->steps, s->reads,
+             s->most_reads, s->scans, s->step_cs_max, s->tiles_sent);
+      s->steps = s->reads = s->most_reads = s->scans = s->step_cs_max = 0;
+      s->stats_at = t + 500;
+    }
+  return r;
 }
 
 void
@@ -803,7 +860,13 @@ server_run (const server_options *o)
     {
       if (o->max_seconds && plat_time_cs () - start >= (unsigned) o->max_seconds * 100)
         break;
-      server_step (20);
+      if (o->step_gap_cs)
+        {
+          server_step (0);
+          usleep (o->step_gap_cs * 10000);
+        }
+      else
+        server_step (20);
     }
   server_finish ();
   return 0;

@@ -14,6 +14,8 @@
    -r  rows of the screen read each scan (0: all of them; the default
        on the desktop is 128, so no one step holds the desktop up)
    -t  stop after this many seconds (for tests)
+   -g  pause this many centiseconds after each step, as the desktop
+       version's poll loop does (for tests)
    -v  say more (each input event)
    -setlogin    set the one user name and password clients must give
    -clearlogin  let anyone connect again
@@ -35,7 +37,7 @@
 #include "wimp.h"
 #endif
 
-#define VERSION "0.1-test3"
+#define VERSION "0.1-test4"
 
 static void
 on_signal (int sig)
@@ -104,6 +106,8 @@ main (int argc, char **argv)
         o.interval_cs = (unsigned) atoi (argv[++i]);
       else if (v && strcmp (a, "-r") == 0)
         o.rows_per_scan = atoi (argv[++i]);
+      else if (v && strcmp (a, "-g") == 0)
+        o.step_gap_cs = (unsigned) atoi (argv[++i]);
       else if (v && strcmp (a, "-t") == 0)
         o.max_seconds = atoi (argv[++i]);
       else

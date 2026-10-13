@@ -28,6 +28,8 @@ push (inq *q, int kind, int a, int b)
       q->count--;
     }
   e = slot (q, q->count++);
+  e->seen = 0;
+  e->t = 0;
   e->kind = kind;
   e->a = a;
   e->b = b;
@@ -87,6 +89,40 @@ inq_wheel (inq *q, int rotation, int horizontal)
     }
 }
 
+static int
+is_button (int ll)
+{
+  return ll >= 0x70 && ll <= 0x72;
+}
+
+/* Is the up for button ll queued after event i? */
+static int
+up_queued (inq *q, int i, int ll)
+{
+  for (i++; i < q->count; i++)
+    {
+      inq_event *e = slot (q, i);
+      if (e->kind == EV_KEY && e->a == ll && e->b == 0)
+        return 1;
+    }
+  return 0;
+}
+
+/* Is a move more than INQ_DRAG_PX from the pointer queued after event i? */
+static int
+drag_queued (inq *q, int i)
+{
+  for (i++; i < q->count; i++)
+    {
+      inq_event *e = slot (q, i);
+      if (e->kind == EV_MOVE
+          && (e->a - q->px > INQ_DRAG_PX || q->px - e->a > INQ_DRAG_PX
+              || e->b - q->py > INQ_DRAG_PX || q->py - e->b > INQ_DRAG_PX))
+        return 1;
+    }
+  return 0;
+}
+
 int
 inq_run (inq *q, unsigned now, const inq_sink *s)
 {
@@ -95,20 +131,43 @@ inq_run (inq *q, unsigned now, const inq_sink *s)
       inq_event *e = slot (q, 0);
       if (e->kind == EV_KEY)
         {
-          int is_button = e->a >= 0x70 && e->a <= 0x74;
-          if (is_button && q->moved
-              && (int) (now - q->last_move) < INQ_AFTER_MOVE_CS)
-            break;
-          if (q->changed && (int) (now - q->last_change) < INQ_BETWEEN_CS)
-            break;
+          int press = is_button (e->a) && e->b;
+          if (press)
+            {
+              if (!e->seen)
+                {
+                  e->seen = 1;
+                  e->t = now;
+                }
+              /* Wait for its up (or a drag, or a long hold). */
+              if (!up_queued (q, 0, e->a) && !drag_queued (q, 0)
+                  && (int) (now - e->t) < INQ_HOLD_CS)
+                break;
+            }
+          /* Pacing. Nothing is held yet for a button-down's own wait, so
+             returning is fine; once a button is down with its up queued,
+             wait here instead. */
+          while ((press && q->moved && (int) (now - q->last_move) < INQ_AFTER_MOVE_CS)
+                 || (q->changed && (int) (now - q->last_change) < INQ_BETWEEN_CS))
+            {
+              if (!q->holding || !s->now)
+                return q->count;
+              now = s->now (s->ctx);
+            }
           s->key (s->ctx, e->a, e->b);
           q->applied[e->a] = (unsigned char) e->b;
           q->last_change = now;
           q->changed = 1;
+          if (press && up_queued (q, 0, e->a))
+            q->holding = e->a;
+          else if (is_button (e->a) && !e->b && q->holding == e->a)
+            q->holding = 0;
         }
       else if (e->kind == EV_MOVE)
         {
           s->move (s->ctx, e->a, e->b);
+          q->px = e->a;
+          q->py = e->b;
           q->last_move = now;
           q->moved = 1;
         }
@@ -132,4 +191,5 @@ inq_release_all (inq *q, const inq_sink *s)
       q->applied[i] = q->wanted[i] = 0;
     }
   q->wheel_acc = q->hwheel_acc = 0;
+  q->holding = 0;
 }

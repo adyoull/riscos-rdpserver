@@ -1,5 +1,26 @@
 # Changelog
 
+## RDPServer 0.1-test4 (13 October 2026)
+
+- Double-clicks open applications as folders (and files in !Edit): found.
+  test3's log shows RISC OS never had Shift held. The Filer, given a
+  double-click, loops reading the mouse without letting other programs
+  run, and if the button is still down after a delay takes it as
+  "double-click and hold", which it treats as Shift (Filer s/Clicks). The
+  server pressed the button, then let the Filer run before it could let
+  go. Now a button-down waits for its button-up from the client, and both
+  go to RISC OS together, the gap between them waited out inside the
+  server. A button held longer than a quarter of a second, or dragged,
+  goes down on its own as before.
+- The pointer on RISC OS crawling after the client's: each step read
+  only part of one message from the client (xrdp's reader takes a PDU in
+  stages), and on the desktop a step comes about every 2 cs. Now each step
+  reads everything waiting (up to 3 cs), and moves in a row are merged, so
+  the pointer jumps to where the client's is.
+- `-v` adds a line every 5 s: steps, reads, scans, the longest step.
+- `-g` (tests): a pause after each step, as on the desktop; the Linux
+  tests now run that way, with a 150-move sweep that must land at once.
+
 ## RDPServer 0.1-test3 (13 October 2026)
 
 - A desktop program now, not a task window. test2 used about 70% of the

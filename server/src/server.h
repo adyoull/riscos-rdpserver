@@ -16,6 +16,8 @@ typedef struct
   unsigned idle_interval_cs; /* scan period when nothing's happening (25) */
   unsigned handshake_cs;     /* time a client has to finish connecting (3000) */
   const char *log_file;      /* libxrdp's messages here, not the console */
+  unsigned step_gap_cs;      /* tests: server_step(0) then a pause this long,
+                                as the desktop version's poll loop does */
 } server_options;
 
 typedef struct
