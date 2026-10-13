@@ -9,7 +9,7 @@ RCD_DIR ?= ../../riscos-crossdev
 include $(RCD_DIR)/riscos.mk
 .DEFAULT_GOAL := all
 
-VERSION := 0.1
+VERSION := 0.2
 SRC := src/main.c src/probe.c src/ro.c src/measure.c
 HDR := src/probe.h src/ro.h src/measure.h
 OUT := out

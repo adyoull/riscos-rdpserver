@@ -39,6 +39,23 @@ probe_rate probe_bench_compare (const unsigned char *copy, const probe_frame *f,
                                 probe_clock_fn clk, unsigned min_cs,
                                 unsigned max_passes, int *changed_rows);
 
+/* The same comparison with 32-bit loads, eight a loop, straight from the
+   frame. Unless every row of both is 4-byte aligned (8 bpp, odd widths),
+   it falls back to probe_bench_compare. */
+probe_rate probe_bench_compare_words (const unsigned char *copy, const probe_frame *f,
+                                      probe_clock_fn clk, unsigned min_cs,
+                                      unsigned max_passes, int *changed_rows);
+
+/* A capture pass as a server would run it: each row copied with memcpy
+   into rowbuf (row_bytes, in ordinary cached memory), compared there with
+   the packed copy, and the copy updated where it differs. Reading the
+   screen only with memcpy suits a screen mapped uncached, where memcpy's
+   multi-word loads are far faster than small ones. */
+probe_rate probe_bench_bounce (unsigned char *copy, const probe_frame *f,
+                               unsigned char *rowbuf, probe_clock_fn clk,
+                               unsigned min_cs, unsigned max_passes,
+                               int *changed_rows);
+
 /* Marks which tile x tile squares differ between two packed frames of
    width x height pixels (bytes_pp bytes each). mask gets one byte per
    tile, row by row (tiles_x * tiles_y bytes). Returns the number of

@@ -8,9 +8,9 @@ Remote Desktop clients built into Windows, macOS, iOS, Android and Linux.
 - `docs/DESIGN.md`: the plan: libxrdp (from xrdp) for the protocol,
   AcornSSL for TLS, the screen read and compared in tiles, input through
   KeyV and OS_Word 21, the VideoCore's H.264 encoder later.
-- `probe/`: **RDPSProbe 0.1**, a test program for a Raspberry Pi. It
+- `probe/`: **RDPSProbe 0.2**, a test program for a Raspberry Pi. It
   measures how fast the screen can be read and compared, and checks that
-  the mouse can be moved the way a remote client would move it.
+  the mouse and keyboard can be driven the way a remote client would.
 
 ## Building RDPSProbe
 
@@ -20,7 +20,7 @@ tagged release, with `make prebuilt` done).
 ```sh
 cd probe
 make RCD_DIR=/path/to/riscos-crossdev check   # checks, fake RISC OS and QEMU tests
-make RCD_DIR=/path/to/riscos-crossdev         # out/RDPSProbe-0.1.zip
+make RCD_DIR=/path/to/riscos-crossdev         # out/RDPSProbe-0.2.zip
 ```
 
 On RISC OS, unzip it and double-click `!RDPSProbe`. It needs

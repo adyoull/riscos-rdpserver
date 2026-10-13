@@ -4,7 +4,9 @@
    table (Vol 1, OS_ReadModeVariable); ScreenStart 148 and DisplayStart 149
    from the 2026 PRM's "VDU Variables" list (p1388). OS_Word 21: PRM p549
    gives the reason codes; the block (+0 reason, +1 X, +3 Y, each a 2-byte
-   little-endian OS-unit value) is the classic PRM's.
+   little-endian OS-unit value) is the classic PRM's. KeyV 1/2 p1244,
+   low-level key numbers p1247, OS_CallAVector p290, OS_Byte 121 p239,
+   INKEY numbers p1241, KeyV = vector 19 (&13), p1343.
 
    Copyright (c) 2026 Andrew Youll. MIT licence (see LICENSE). */
 #include <stdint.h>
@@ -102,4 +104,25 @@ const char *probe_read_mouse (int *x, int *y)
 const char *probe_read_pointer (int *x, int *y)
 {
   return read21 (6, x, y);
+}
+
+#define KeyV 19   /* vector number, PRM p1343 vector table */
+
+const char *probe_keyv (int low_level_key, int pressed)
+{
+  const _kernel_oserror *e;
+  e = _swix (OS_CallAVector, _INR (0, 1) | _IN (9),
+             pressed ? 2 : 1, low_level_key, KeyV);
+  return e ? e->errmess : NULL;
+}
+
+const char *probe_key_down (int internal_key, int *down)
+{
+  int r1 = 0;
+  const _kernel_oserror *e;
+  e = _swix (OS_Byte, _INR (0, 1) | _OUT (1), 121, internal_key ^ 0x80, &r1);
+  if (e)
+    return e->errmess;
+  *down = (r1 & 0xff) == 0xff;
+  return NULL;
 }

@@ -7,4 +7,4 @@ RMEnsure SharedUnixLibrary 1.16 Error RDPSProbe needs SharedUnixLibrary 1.16 or 
 RMEnsure ARMEABISupport 0 IfThere System:Modules.ARMEABISupport Then RMLoad System:Modules.ARMEABISupport
 RMEnsure ARMEABISupport 0 Error RDPSProbe needs the ARMEABISupport module. Install it with PackMan.
 | Two copies of a 1920x1080 32bpp screen need about 17 MB.
-TaskWindow "<RDPSProbe$Dir>.RDPSProbe -p -o <RDPSProbe$Dir>.Report" -wimpslot 24000K -name "RDPSProbe" -display
+TaskWindow "<RDPSProbe$Dir>.RDPSProbe -p -k -o <RDPSProbe$Dir>.Report" -wimpslot 24000K -name "RDPSProbe" -display

@@ -16,6 +16,8 @@ static int scr_w = 200, scr_h = 100, scr_l2 = 5, scr_line = 1024, scr_size;
 static int mouse_x = 10, mouse_y = 20, ptr_x = 10, ptr_y = 20;
 static int pointer_lags;   /* 1: the pointer never follows the mouse */
 static unsigned clock_cs;
+/* The kernel's view of Left Shift, as KeyV and OS_Byte 121 see it. */
+static int shift_down, keyv_ignored, keyv_calls, keyv_last_r0, keyv_last_r1;
 
 static const _kernel_oserror *vdu (int swi, int r[10])
 {
@@ -75,12 +77,37 @@ static const _kernel_oserror *ticks (int swi, int r[10])
   return NULL;
 }
 
+static const _kernel_oserror *callavector (int swi, int r[10])
+{
+  (void) swi;
+  if (r[9] != 19)
+    abort ();
+  keyv_calls++;
+  keyv_last_r0 = r[0];
+  keyv_last_r1 = r[1];
+  if (!keyv_ignored && r[1] == 0x4C)
+    shift_down = r[0] == 2;
+  return NULL;
+}
+
+static const _kernel_oserror *byte (int swi, int r[10])
+{
+  (void) swi;
+  if (r[0] != 121 || r[1] != (3 ^ 0x80))
+    abort ();
+  r[1] = shift_down ? 0xff : 0;
+  return NULL;
+}
+
 static void setup (void)
 {
   fake_reset ();
   fake_swi (OS_ReadVduVariables, "OS_ReadVduVariables", vdu);
   fake_swi (OS_Word, "OS_Word", word);
   fake_swi (OS_ReadMonotonicTime, "OS_ReadMonotonicTime", ticks);
+  fake_swi (OS_CallAVector, "OS_CallAVector", callavector);
+  fake_swi (OS_Byte, "OS_Byte", byte);
+  shift_down = keyv_ignored = keyv_calls = 0;
   mouse_x = ptr_x = 10;
   mouse_y = ptr_y = 20;
   scr_size = scr_line * scr_h;
@@ -91,13 +118,18 @@ static void setup (void)
 
 static char report[8192];
 
-static int run (int pointer)
+static int run_k (int pointer, int keys)
 {
-  probe_options o = { 5, 50, pointer };
+  probe_options o = { 5, 50, pointer, keys };
   FILE *f = fmemopen (report, sizeof report, "w");
   int rc = probe_run (f, &o);
   fclose (f);
   return rc;
+}
+
+static int run (int pointer)
+{
+  return run_k (pointer, 0);
 }
 
 int main (void)
@@ -121,6 +153,24 @@ int main (void)
   CHECK (strstr (report, "(1 of 8 tiles dirty)") != NULL, "the tile scan finds the one change");
   CHECK (strstr (report, "Moving the mouse") == NULL, "no mouse test without -p");
   CHECK (mouse_x == -3, "and the mouse is left alone");
+  CHECK (strstr (report, "word loads on the screen") != NULL, "the word compare is reported");
+  CHECK (strstr (report, "row copied out, then compared") != NULL, "and the capture pass");
+  CHECK (strstr (report, "(0 rows changed in its last pass)") != NULL, "a still screen: no rows change");
+  CHECK (keyv_calls == 0, "no keys pressed without -k");
+
+  /* -k: Left Shift pressed and released through KeyV. */
+  setup ();
+  CHECK (run_k (0, 1) == 0, "the key test passes when the kernel sees the key");
+  CHECK (strstr (report, "seen down yes, seen up again yes: PASS") != NULL, "it says so");
+  CHECK (keyv_calls == 2 && keyv_last_r0 == 1 && keyv_last_r1 == 0x4C, "pressed, then released (KeyV 1, &4C)");
+  CHECK (!shift_down, "and Shift is left up");
+  setup ();
+  keyv_ignored = 1;
+  CHECK (run_k (0, 1) != 0 && strstr (report, "seen down no") != NULL, "a KeyV the kernel ignores fails");
+  setup ();
+  shift_down = 1;
+  CHECK (run_k (0, 1) != 0 && strstr (report, "already down") != NULL, "Shift held already: no test");
+  CHECK (keyv_calls == 0, "and no KeyV calls");
 
   /* The screen changes under the comparison: rows are counted. */
   setup ();

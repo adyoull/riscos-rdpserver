@@ -46,6 +46,36 @@ int main (void)
   probe_bench_compare (a, &f, clk, 1, 1, &changed);
   CHECK (changed == 2, "two changed rows are counted");
 
+  /* Word compare: needs aligned rows, so a frame of its own (malloc'd,
+     stride a multiple of 4). Row 7 differs in its last byte, past the
+     unrolled part. */
+  {
+    size_t wrow = 132 * 4, wstride = wrow + 8;
+    unsigned char *w = malloc (wstride * H), *wc = malloc (wrow * H), *rb = malloc (wrow);
+    probe_frame g = { w, H, wrow, wstride };
+    for (y = 0; y < (int) (wstride * H); y++)
+      w[y] = (unsigned char) (y * 13);
+    probe_bench_copy (wc, &g, clk, 1, 1);
+    probe_bench_compare_words (wc, &g, clk, 1, 1, &changed);
+    CHECK (changed == 0, "words: unchanged");
+    w[7 * wstride + wrow - 1] ^= 1;
+    w[9 * wstride + 5] ^= 1;
+    probe_bench_compare_words (wc, &g, clk, 1, 1, &changed);
+    CHECK (changed == 2, "words: a last byte and an early byte both found");
+    /* The bounce pass finds the same rows and brings the copy up to date. */
+    probe_bench_bounce (wc, &g, rb, clk, 1, 1, &changed);
+    CHECK (changed == 2, "bounce: two rows changed");
+    probe_bench_bounce (wc, &g, rb, clk, 1, 1, &changed);
+    CHECK (changed == 0, "bounce: the copy was updated");
+    for (y = 0; y < H; y++)
+      CHECK (memcmp (wc + y * wrow, w + y * wstride, wrow) == 0, "bounce: copy matches");
+    free (w); free (wc); free (rb);
+  }
+  /* The odd frame (start +1, stride not a multiple of 4) falls back to
+     memcmp under the alignment trap instead of aborting. */
+  probe_bench_compare_words (a, &f, clk, 1, 1, &changed);
+  CHECK (changed == 2, "words on an unaligned frame: the memcmp fallback");
+
   memcpy (b, a, row * H);
   n = probe_dirty_tiles (a, b, W, H, BPP, 64, mask);
   CHECK (n == 0, "no tiles differ");

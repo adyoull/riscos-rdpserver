@@ -1,4 +1,4 @@
-RDPSProbe 0.1
+RDPSProbe 0.2
 =============
 
 A test program for the RISC OS RDP server project. It measures what an
@@ -14,16 +14,20 @@ What it does:
 - copies the whole screen into memory again and again for two seconds,
   to see how fast the screen can be read;
 - does the same from memory to memory, for comparison;
-- compares the screen with a copy, as a server looking for changes would;
+- compares the screen with a copy, as a server looking for changes would,
+  three ways: memcmp, 32-bit loads, and each row copied out first;
 - times a scan for changed 64x64 squares between two copies in memory;
 - moves the mouse pointer a little way (OS_Word 21) and back, to check a
-  remote mouse could move it.
+  remote mouse could move it;
+- presses and releases Left Shift through KeyV, the way a remote keyboard
+  would, and checks the system saw it (Shift on its own types nothing).
 
 Please run it in the desktop mode you'd use (the size and colours make a
-difference), and leave the mouse still while it runs.
+difference), and leave the mouse and keyboard alone while it runs.
 
-From the command line:  RDPSProbe [-p] [-t centiseconds] [-o file]
+From the command line:  RDPSProbe [-p] [-k] [-t centiseconds] [-o file]
   -p  also try moving the mouse
+  -k  also try pressing Left Shift through KeyV
   -t  how long to time each test (default 200)
   -o  save the report in a file too
 

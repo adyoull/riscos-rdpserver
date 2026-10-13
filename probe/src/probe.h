@@ -6,13 +6,14 @@
 
 #include <stdio.h>
 
-#define PROBE_VERSION "0.1"
+#define PROBE_VERSION "0.2"
 
 typedef struct
 {
   unsigned min_cs;       /* time each test for at least this long */
   unsigned max_passes;   /* and never more passes than this */
   int pointer;           /* also try moving the mouse */
+  int keys;              /* also press and release Left Shift through KeyV */
 } probe_options;
 
 /* Runs every test, writing the report to out. Returns 0 if nothing failed. */

@@ -71,13 +71,64 @@ static int pointer_test (FILE *out, const probe_mode *m)
   return ok ? 0 : 1;
 }
 
+/* Left Shift: low-level key number &4C (p1247), INKEY/internal 3 (p1241).
+   Shift on its own types nothing, so pressing it can't do any harm. */
+#define LL_LEFT_SHIFT 0x4C
+#define IN_LEFT_SHIFT 3
+
+static int wait_key (int want, int *down)
+{
+  unsigned t0 = probe_time_cs (), guard;
+  const char *e = NULL;
+  for (guard = 0; guard < 10000000u; guard++)
+    {
+      e = probe_key_down (IN_LEFT_SHIFT, down);
+      if (e || *down == want || probe_time_cs () - t0 >= 10)
+        break;
+    }
+  return e == NULL;
+}
+
+static int key_test (FILE *out)
+{
+  int before = 0, held = 0, after = 1, ok;
+  const char *e;
+
+  e = probe_key_down (IN_LEFT_SHIFT, &before);
+  if (e)
+    {
+      fprintf (out, "  OS_Byte 121 failed: %s\n", e);
+      return 1;
+    }
+  if (before)
+    {
+      fprintf (out, "  Left Shift is already down: let go of the keyboard and try again\n");
+      return 1;
+    }
+  e = probe_keyv (LL_LEFT_SHIFT, 1);
+  if (e)
+    {
+      fprintf (out, "  KeyV 2 (key pressed) through OS_CallAVector failed: %s\n", e);
+      return 1;
+    }
+  wait_key (1, &held);
+  e = probe_keyv (LL_LEFT_SHIFT, 0);   /* always let go */
+  if (e)
+    fprintf (out, "  KeyV 1 (key released) failed: %s: press and release Shift\n", e);
+  wait_key (0, &after);
+  ok = !e && held && !after;
+  fprintf (out, "  Left Shift through KeyV: seen down %s, seen up again %s: %s\n",
+           held ? "yes" : "no", after ? "no" : "yes", ok ? "PASS" : "FAIL");
+  return ok ? 0 : 1;
+}
+
 int probe_run (FILE *out, const probe_options *o)
 {
   probe_mode m;
   probe_frame f;
   const char *e;
   size_t row_bytes, frame_bytes;
-  unsigned char *copy, *copy2, *mask;
+  unsigned char *copy, *copy2, *mask, *rowbuf;
   probe_rate r;
   int changed = 0, bytes_pp, tiles, dirty, fails = 0;
   unsigned t0, t1, i, reps;
@@ -120,7 +171,8 @@ int probe_run (FILE *out, const probe_options *o)
   bytes_pp = m.log2bpp >= 3 ? 1 << (m.log2bpp - 3) : 1;
   tiles = ((m.width + TILE - 1) / TILE) * ((m.height + TILE - 1) / TILE);
   mask = malloc ((size_t) tiles);
-  if (!copy || !copy2 || !mask)
+  rowbuf = malloc (row_bytes);
+  if (!copy || !copy2 || !mask || !rowbuf)
     {
       fprintf (out, "Not enough memory for two copies of the screen "
                "(%lu bytes each): give it a bigger WimpSlot.\n",
@@ -128,6 +180,7 @@ int probe_run (FILE *out, const probe_options *o)
       free (copy);
       free (copy2);
       free (mask);
+      free (rowbuf);
       return 1;
     }
 
@@ -149,9 +202,21 @@ int probe_run (FILE *out, const probe_options *o)
 
   r = probe_bench_compare (copy, &f, probe_time_cs, o->min_cs, o->max_passes,
                            &changed);
-  rate_line (out, "comparing the screen with a copy", r, (double) frame_bytes);
+  rate_line (out, "comparing, memcmp on the screen", r, (double) frame_bytes);
   fprintf (out, "  (%d of %d rows had changed by the last comparison)\n",
            changed, m.height);
+
+  r = probe_bench_compare_words (copy, &f, probe_time_cs, o->min_cs,
+                                 o->max_passes, &changed);
+  rate_line (out, "comparing, word loads on the screen", r, (double) frame_bytes);
+
+  /* The capture pass a server would use: memcpy each row out, compare in
+     memory, keep the copy up to date. */
+  r = probe_bench_bounce (copy2, &f, rowbuf, probe_time_cs, o->min_cs,
+                          o->max_passes, &changed);
+  rate_line (out, "row copied out, then compared", r, (double) frame_bytes);
+  fprintf (out, "  (%d rows changed in its last pass)\n", changed);
+  memcpy (copy, copy2, frame_bytes);
 
   /* Changes found in memory: copy2 is copy; change one tile, then time the
      tile scan an RDP server would run on two frames in memory. */
@@ -182,6 +247,12 @@ int probe_run (FILE *out, const probe_options *o)
       fails++;
     }
 
+  if (o->keys)
+    {
+      fprintf (out, "\nPressing a key (KeyV):\n");
+      fails += key_test (out);
+    }
+
   if (o->pointer)
     {
       fprintf (out, "\nMoving the mouse (OS_Word 21):\n");
@@ -191,6 +262,7 @@ int probe_run (FILE *out, const probe_options *o)
   free (copy);
   free (copy2);
   free (mask);
+  free (rowbuf);
   fprintf (out, "\nDone.\n");
   return fails ? 1 : 0;
 }

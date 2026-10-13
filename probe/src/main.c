@@ -1,6 +1,7 @@
 /* RDPSProbe: command line.
-     RDPSProbe [-p] [-t centiseconds] [-o file]
+     RDPSProbe [-p] [-k] [-t centiseconds] [-o file]
    -p  also move the mouse (and put it back)
+   -k  also press and release Left Shift through KeyV
    -t  how long to time each test (default 200 cs)
    -o  write the report to a file as well as the screen
 
@@ -19,17 +20,20 @@ int main (int argc, char **argv)
   o.min_cs = 200;
   o.max_passes = 100000;
   o.pointer = 0;
+  o.keys = 0;
   for (i = 1; i < argc; i++)
     {
       if (strcmp (argv[i], "-p") == 0)
         o.pointer = 1;
+      else if (strcmp (argv[i], "-k") == 0)
+        o.keys = 1;
       else if (strcmp (argv[i], "-t") == 0 && i + 1 < argc)
         o.min_cs = (unsigned) strtoul (argv[++i], NULL, 10);
       else if (strcmp (argv[i], "-o") == 0 && i + 1 < argc)
         file = argv[++i];
       else
         {
-          fprintf (stderr, "Usage: RDPSProbe [-p] [-t centiseconds] [-o file]\n");
+          fprintf (stderr, "Usage: RDPSProbe [-p] [-k] [-t centiseconds] [-o file]\n");
           return 2;
         }
     }
