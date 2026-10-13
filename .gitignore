@@ -1,0 +1,7 @@
+out/
+dist/
+release/
+handoffs/
+*handoff*.md
+*START-HERE*.md
+.DS_Store

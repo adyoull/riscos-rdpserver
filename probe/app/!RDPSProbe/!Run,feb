@@ -1,0 +1,10 @@
+| !Run for !RDPSProbe
+| RDPSProbe is a UnixLib program converted to Absolute (AIF): it needs
+| SharedUnixLibrary and ARMEABISupport (both from PackMan).
+Set RDPSProbe$Dir <Obey$Dir>
+RMEnsure SharedUnixLibrary 1.16 IfThere System:Modules.SharedULib Then RMLoad System:Modules.SharedULib
+RMEnsure SharedUnixLibrary 1.16 Error RDPSProbe needs SharedUnixLibrary 1.16 or later. Install it with PackMan.
+RMEnsure ARMEABISupport 0 IfThere System:Modules.ARMEABISupport Then RMLoad System:Modules.ARMEABISupport
+RMEnsure ARMEABISupport 0 Error RDPSProbe needs the ARMEABISupport module. Install it with PackMan.
+| Two copies of a 1920x1080 32bpp screen need about 17 MB.
+TaskWindow "<RDPSProbe$Dir>.RDPSProbe -p -o <RDPSProbe$Dir>.Report" -wimpslot 24000K -name "RDPSProbe" -display
