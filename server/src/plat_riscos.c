@@ -141,6 +141,67 @@ plat_click (int ll, unsigned up_after_cs)
   return 0;
 }
 
+/* A held button (a drag): down now, and a watchdog release in watch_cs,
+   pushed back by plat_button_keep each time the server runs. If a program
+   stops the desktop while the button is held (its own drag loop without
+   Wimp_Poll: !Folio's title bar), the server can't run to let go, and the
+   watchdog does. */
+void
+plat_button_hold (int ll, unsigned watch_cs)
+{
+  volatile int *slot;
+  if (ll < 0x70 || ll > 0x72 || clickup_init () != 0)
+    {
+      plat_key (ll, 1);
+      return;
+    }
+  slot = click_slot (ll);
+  click_cancel (ll);
+  plat_key (ll, 1);
+  slot[0] = ll;
+  slot[1] = 1;
+  if (_swix (OS_CallAfter, _INR (0, 2), (int) watch_cs, clickup, slot))
+    {
+      slot[0] = -ll;                    /* no watchdog: held until let go */
+      slot[1] = 0;
+    }
+}
+
+int
+plat_button_keep (int ll, unsigned watch_cs)
+{
+  volatile int *slot;
+  if (ll < 0x70 || ll > 0x72 || !clickup)
+    return 0;
+  slot = click_slot (ll);
+  if (!slot[1])
+    return slot[0] == -ll ? 0 : -1;     /* -ll: no watchdog was set */
+  _swix (OS_RemoveTickerEvent, _INR (0, 1), clickup, slot);
+  if (!slot[1])
+    return -1;                          /* it went off just now */
+  if (_swix (OS_CallAfter, _INR (0, 2), (int) watch_cs, clickup, slot))
+    {
+      slot[0] = -ll;
+      slot[1] = 0;
+    }
+  return 0;
+}
+
+void
+plat_button_release (int ll)
+{
+  volatile int *slot;
+  if (ll >= 0x70 && ll <= 0x72 && clickup)
+    {
+      slot = click_slot (ll);
+      if (slot[1])
+        _swix (OS_RemoveTickerEvent, _INR (0, 1), clickup, slot);
+      slot[1] = 0;
+      slot[0] = ll;
+    }
+  plat_key (ll, 0);
+}
+
 void
 plat_click_finish (void)
 {

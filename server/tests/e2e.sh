@@ -26,7 +26,8 @@ DISP=${DISP:-:97}
 rm -rf "$OUT"; mkdir -p "$OUT"
 export RDPS_RESOURCES="$PWD/app/!RDPServer" RDPS_CHOICES="$OUT" \
        RDPS_HOST_INPUT_LOG="$OUT/input.log" RDPS_HOST_STILL=1 DISPLAY=$DISP \
-       RDPS_HOST_STUCK_SHIFT=1   # as the Pi had with test2: see below
+       RDPS_HOST_STUCK_SHIFT=1 \
+       RDPS_HOST_BLOCK_HOLD=1    # a program that stops the desktop during a drag
 fails=0
 ok () { echo "ok   $1"; }
 bad () { echo "FAIL $1"; fails=$((fails + 1)); }
@@ -92,6 +93,13 @@ run_client () {  # name command...
     sleep 0.5
     grep "^mouse" "$OUT/input.log" | tail -1 >"$OUT/sweep-end.txt"
     sleep 1
+    # A drag (down, moves, up later): the button is held, and when a
+    # program stops the desktop meanwhile (RDPS_HOST_BLOCK_HOLD, like
+    # !Folio's title bar) the watchdog lets go of it.
+    xdotool mousemove 300 200 mousedown 1 >/dev/null 2>&1; sleep 0.3
+    xdotool mousemove 340 200 >/dev/null 2>&1; sleep 0.3
+    xdotool mousemove 380 210 >/dev/null 2>&1; sleep 1
+    xdotool mouseup 1 >/dev/null 2>&1; sleep 1
     # A Shift-click the client means: Shift must stay down for it.
     xdotool keydown Shift_L >/dev/null 2>&1; sleep 1
     xdotool click 1 >/dev/null 2>&1; sleep 1
@@ -123,6 +131,9 @@ awk '/^mouse 200 150$/ && !m {m=NR} /^key 70 down$/ && !d {d=NR} END {exit !(m &
 [ "$(cat "$OUT/sweep-end.txt")" = "mouse 250 300" ] \
   && ok "a quick sweep: the pointer is at its end within 0.5 s" \
   || bad "pointer lagging: 0.5 s after the sweep it was at $(cat "$OUT/sweep-end.txt")"
+grep -q "^watchdog 70$" "$OUT/input.log" && grep -q "stopped the desktop while mouse button &70" "$OUT/server.log" \
+  && ok "a drag a program stops: the watchdog lets go, and the log says so" \
+  || bad "no watchdog release for the blocked drag"
 # RISC OS thought Shift was held (RDPS_HOST_STUCK_SHIFT): the server lets
 # go of it before the first click, but not before the Shift-click.
 awk '/^key 4C up$/ && !u {u=NR} /^key 70 down$/ && !d {d=NR} END {exit !(u && d && u < d)}' "$OUT/input.log" \

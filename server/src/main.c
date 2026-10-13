@@ -37,7 +37,7 @@
 #include "wimp.h"
 #endif
 
-#define VERSION "0.1-test6"
+#define VERSION "0.1-test7"
 
 static void
 on_signal (int sig)

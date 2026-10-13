@@ -1,5 +1,15 @@
 # Changelog
 
+## RDPServer 0.1-test7 (13 October 2026)
+
+- Dragging !Folio's windows by the title bar still froze the desktop
+  (other windows were fine). Folio must run its own loop while the button
+  is down, without letting other programs run, so the server can't send
+  the button-up or the moves until it's let go. A held button now has a
+  watchdog: a ticker event lets go of it if the server hasn't run for
+  half a second, so such a program stops waiting, and the log says so.
+  Dragging those windows from the client still won't follow the pointer.
+
 ## RDPServer 0.1-test6 (13 October 2026)
 
 - Double-clicks work (test5 on the Pi), but a click on some title bars
