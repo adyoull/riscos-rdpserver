@@ -1,5 +1,43 @@
 # Changelog
 
+## RDPServer 0.2-test1 (13 October 2026)
+
+- **The server is now a module** (`RDPSMod`, title RDPServer), so a
+  session no longer freezes while a RISC OS error box is open. The Wimp
+  stops multitasking while `Wimp_ReportError` waits (its loop, "pollit"
+  in the Wimp's s/Wimp07), so the old Wimp task got no time at all: the
+  client kept its last picture and couldn't click the box. The module
+  runs from a transient callback (an OS_CallEvery ticker every 2 cs asks
+  for one) and, while an error box is open (Service_WimpReportError),
+  from ByteV: the box's loop calls OS_Byte &81 with R1 = R2 = 0 on every
+  pass. The client sees the box and its click goes through.
+- The server runs on a stack of its own (one coroutine, src/coro_arm.s).
+  Wherever it used to wait it now lets other programs run: libxrdp's
+  connection sequence (which held the desktop for up to 10 s), a full
+  send buffer, and the first picture (sent in slices of 2 cs).
+- **Disconnect drops the client at once**, also one that is still
+  connecting: the front end shuts the socket down and the server ends the
+  session at its next turn.
+- No SWIs, *commands or service call numbers to allocate: the front end
+  finds the module with OS_Module 18 and calls the table after its header
+  (as UnixLib's PThreadTicker is used). The front end attaches; the module
+  won't be killed while its front end runs, stops serving if the front end
+  goes (Service_WimpCloseDown), and is removed when RDPServer quits.
+- The front end (the icon bar icon, Status, Choices) gives the module the
+  files libxrdp reads (xrdp.ini, rsakeys.ini, logins), so the module never
+  uses FileSwitch. Its WimpSlot drops from 24000K to 8000K: the copy of
+  the screen is in the module's dynamic area, "RDPServer".
+- `-cli` (the task window version) is gone on RISC OS.
+- Tests: the module in the Unicorn emulator with a pretend RISC OS
+  around it (tests/modemu.py): loaded at an address it wasn't linked for,
+  RMReInit, the entries, an error box (ByteV only, no callbacks),
+  finalisation (52 checks); and with real rdesktop and FreeRDP clients
+  (tests/e2e_module.sh: the error box reaches the client and its click
+  closes it; Disconnect mid-session and mid-handshake). The front end's
+  calls against a pretend module (29 checks), the module's printf/scanf
+  against the C library's (28). Not yet run on RISC OS.
+
+
 ## RDPServer 0.1-test9 (13 October 2026)
 
 - The held-button watchdog (test7, test8) is gone: Folio 0.0.1-test32

@@ -16,6 +16,7 @@
 
 #include "arch.h"
 #include "os_calls.h"
+#include "platform.h"
 #include "ssl_calls.h"
 
 #include "mbedtls/bignum.h"
@@ -303,12 +304,17 @@ ssl_hmac_complete (void *hmac, char *data, int len)
 
 /* --- RSA: numbers are little-endian byte strings, as RDP sends them -------- */
 
+/* How long the last ssl_mod_exp took (the server logs it with -v: the
+   RSA step of a connection can't yield, so it holds the desktop). */
+unsigned rdps_modexp_cs;
+
 int
 ssl_mod_exp (char *out, int out_len, const char *in, int in_len,
              const char *mod, int mod_len, const char *exp, int exp_len)
 {
   mbedtls_mpi a, e, n, r;
   int rv = 0;
+  unsigned t0 = plat_time_cs ();
 
   mbedtls_mpi_init (&a);
   mbedtls_mpi_init (&e);
@@ -329,6 +335,7 @@ ssl_mod_exp (char *out, int out_len, const char *in, int in_len,
   mbedtls_mpi_free (&e);
   mbedtls_mpi_free (&n);
   mbedtls_mpi_free (&r);
+  rdps_modexp_cs = plat_time_cs () - t0;
   return rv;
 }
 

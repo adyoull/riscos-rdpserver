@@ -34,14 +34,21 @@ typedef struct
 int server_start (const server_options *o);
 int server_step (unsigned max_wait_cs);
 void server_finish (void);
+/* Quitting: server_finish, and on RISC OS let go of the module. */
+void server_shutdown (void);
+/* Why server_start failed, if it knows (else NULL). */
+const char *server_start_error (void);
 void server_disconnect (void);
+/* The client's socket, or -1 (for rdps_cmd_disconnect). */
+int server_client_socket (void);
 /* Reads the logins file again (after Choices changed it). 0 = done. */
 int server_reload_logins (void);
 void server_get_status (server_status *st);
 void server_set_message_hook (void (*hook) (const char *line));
 
-/* Runs until stopped (Escape in the task window) or max_seconds. Returns
-   the exit status. */
+/* Runs until stopped (Escape in the task window) or max_seconds, the
+   server in its thread (srvthread.h) resumed every centisecond or so as
+   the module's callback does. Returns the exit status. Not in the module. */
 int server_run (const server_options *o);
 
 /* Set by the platform to stop the server. */

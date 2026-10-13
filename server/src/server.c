@@ -32,8 +32,10 @@
 #include "input.h"
 #include "auth.h"
 #include "server.h"
+#include "srvthread.h"
 
 volatile int server_stop;
+extern unsigned rdps_modexp_cs;   /* ssl_calls.c */
 int g_rdps_desktop_width, g_rdps_desktop_height;
 
 typedef struct
@@ -64,9 +66,9 @@ typedef struct
   int running;
 } server;
 
-/* A client gets this long to finish connecting: libxrdp reads the
-   connection sequence with blocking reads, and nothing else runs
-   meanwhile. */
+/* A client gets this long to finish connecting. libxrdp's waits during
+   the connection sequence yield (srvthread.h), so other programs run
+   meanwhile; this only stops a client that never finishes. */
 #define HANDSHAKE_CS 3000
 /* After this long without a change on the screen or input from the
    client, scan at the idle rate. */
@@ -369,6 +371,21 @@ session_up (server *s)
       return 1;
     }
   memset (ci->password, 0, sizeof ci->password);
+  {
+    /* The screen again: other programs ran while the client was
+       connecting (a mode change meanwhile would leave the old one). */
+    rdps_screen cur;
+    if (plat_screen (&cur) != NULL || cur.width != s->scr.width
+        || cur.height != s->scr.height || cur.stride != s->scr.stride
+        || pix_format_of (cur.log2bpp, cur.ncolour, cur.modeflags) != s->fmt)
+      {
+        say ("the screen mode changed while the client was connecting");
+        return -1;
+      }
+    s->scr = cur;
+  }
+  if (s->opt->verbose)
+    say ("key exchange: the RSA step took %u cs", rdps_modexp_cs);
   s->client_bpp = ci->bpp;
   if (cap_init (&s->cap, s->scr.width, s->scr.height, pix_bytes (s->fmt)) != 0)
     return -1;
@@ -391,12 +408,26 @@ session_up (server *s)
   return 0;
 }
 
+/* Sends the changed tiles. A whole screen takes a while to compress (the
+   first frame, or everything changing at once), so every 2 cs the
+   thread lets other programs run (srvthread.h): on RISC OS the desktop
+   never stops for more than about that. */
+#define SEND_SLICE_CS 2
+
 static void
 send_dirty (server *s)
 {
   int i = 0, x, y, w, h;
+  unsigned slice = plat_time_cs ();
   while (cap_next_dirty (&s->cap, &i, &x, &y, &w, &h))
     {
+      if ((int) (plat_time_cs () - slice) >= SEND_SLICE_CS)
+        {
+          rdps_wait_cs (0);
+          slice = plat_time_cs ();
+          if (!s->session || !s->trans || rdps_thread_ending ())
+            return;
+        }
       pix_convert (s->fmt, cap_pixel (&s->cap, x, y), s->cap.row_bytes, w, h,
                    s->client_bpp, s->tilebuf);
       libxrdp_send_bitmap (s->session, w, h, s->client_bpp,
@@ -472,7 +503,7 @@ static int
 is_term (void)
 {
   server *s = &srv;
-  if (server_stop)
+  if (server_stop || rdps_thread_ending ())
     return 1;
   return s->handshake_deadline != 0
          && (int) (plat_time_cs () - s->handshake_deadline) >= 0;
@@ -526,8 +557,9 @@ session_start (server *s, struct trans *t)
   /* The connection sequence, up to the client's capabilities. */
   if (libxrdp_process_incoming (s->session) != 0)
     {
-      session_end (s, is_term () && !server_stop ? "too slow connecting"
-                                                 : "the connection sequence failed");
+      session_end (s, rdps_thread_ending () ? "disconnected from this computer"
+                      : is_term () && !server_stop ? "too slow connecting"
+                      : "the connection sequence failed");
       return;
     }
   init_stream (t->in_s, 32 * 1024);
@@ -736,7 +768,8 @@ step (unsigned max_wait_cs)
           if (r > 0)
             /* Slow down password guessing: no new clients for 3 s. */
             s->refuse_until = plat_time_cs () + 300;
-          session_end (s, r > 0 ? "wrong user name or password" : "out of memory");
+          session_end (s, r > 0 ? "wrong user name or password"
+                          : "couldn't start the session");
           return 0;
         }
       s->was_up = 1;
@@ -842,6 +875,12 @@ server_step (unsigned max_wait_cs)
   return r;
 }
 
+int
+server_client_socket (void)
+{
+  return srv.trans ? (int) srv.trans->sck : -1;
+}
+
 void
 server_disconnect (void)
 {
@@ -876,6 +915,18 @@ server_finish (void)
 }
 
 void
+server_shutdown (void)
+{
+  server_finish ();
+}
+
+const char *
+server_start_error (void)
+{
+  return NULL;
+}
+
+void
 server_get_status (server_status *st)
 {
   server *s = &srv;
@@ -890,26 +941,4 @@ server_get_status (server_status *st)
   st->bpp = s->client_bpp;
   st->tiles_sent = s->tiles_sent;
   st->login_set = s->logins.count > 0;
-}
-
-int
-server_run (const server_options *o)
-{
-  unsigned start = plat_time_cs ();
-  if (server_start (o) != 0)
-    return 1;
-  while (!server_stop)
-    {
-      if (o->max_seconds && plat_time_cs () - start >= (unsigned) o->max_seconds * 100)
-        break;
-      if (o->step_gap_cs)
-        {
-          server_step (0);
-          usleep (o->step_gap_cs * 10000);
-        }
-      else
-        server_step (20);
-    }
-  server_finish ();
-  return 0;
 }

@@ -409,8 +409,12 @@ start_server (void)
   if (!running)
     {
       char t[200];
-      snprintf (t, sizeof t, "RDPServer can't listen on port %s (is another "
-                "server using it?). Choose another port in Choices.", port_text);
+      const char *why = server_start_error ();
+      if (why)
+        snprintf (t, sizeof t, "%s", why);
+      else
+        snprintf (t, sizeof t, "RDPServer can't listen on port %s (is another "
+                  "server using it?). Choose another port in Choices.", port_text);
       wimp_report (t);
     }
   refresh_due = 1;
@@ -674,8 +678,7 @@ wimp_init (const wimp_setup *w)
 void
 wimp_close (void)
 {
-  if (running)
-    server_finish ();
+  server_shutdown ();
   running = 0;
   server_set_message_hook (NULL);
   if (log_out)

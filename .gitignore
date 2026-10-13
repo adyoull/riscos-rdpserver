@@ -6,3 +6,4 @@ handoffs/
 *START-HERE*.md
 .DS_Store
 server/build/
+__pycache__/

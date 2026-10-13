@@ -27,6 +27,9 @@
 #include "arch.h"
 #include "os_calls.h"
 #include "thread_calls.h"
+#include "platform.h"
+#include "srvthread.h"
+#include "coro.h"
 
 /* --- text output ---------------------------------------------------------- */
 
@@ -254,7 +257,7 @@ g_sck_socket_ok (int sck)
 }
 
 static int
-poll_one (int sck, short events, int millis)
+poll_now (int sck, short events, int millis)
 {
   struct pollfd p;
   if (sck < 0)
@@ -262,7 +265,33 @@ poll_one (int sck, short events, int millis)
   p.fd = sck;
   p.events = events;
   p.revents = 0;
-  return poll (&p, 1, millis) > 0 && (p.revents & (events | POLLHUP)) != 0;
+  return poll (&p, 1, millis) > 0 && (p.revents & (events | POLLHUP | POLLERR)) != 0;
+}
+
+/* Inside the server thread a wait never blocks: look, and if the socket
+   isn't ready, let other programs run for a centisecond and look again
+   (srvthread.h). libxrdp's waits are short (100 ms) and in loops that
+   check is_term, so a dropped client or a stop ends them. */
+static int
+poll_one (int sck, short events, int millis)
+{
+  unsigned until;
+  if (millis <= 0 || !co_inside ())
+    {
+#ifdef RDPS_MODULE
+      millis = 0;   /* never wait in the module outside the thread */
+#endif
+      return poll_now (sck, events, millis);
+    }
+  until = plat_time_cs () + (unsigned) (millis + 9) / 10;
+  for (;;)
+    {
+      if (poll_now (sck, events, 0))
+        return 1;
+      if ((int) (plat_time_cs () - until) >= 0 || rdps_thread_ending ())
+        return 0;
+      rdps_wait_cs (1);
+    }
 }
 
 int
@@ -314,7 +343,7 @@ g_sck_get_peer_description (int sck, char *desc, unsigned int bytes)
 void
 g_sleep (int msecs)
 {
-  usleep ((useconds_t) msecs * 1000);
+  rdps_wait_cs ((unsigned) (msecs + 9) / 10);
 }
 
 int

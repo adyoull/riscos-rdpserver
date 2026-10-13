@@ -17,7 +17,8 @@
 /* --- stand-ins for the server, the logins and the platform ---------------- */
 
 static server_status fake_status;
-static int started, finished, disconnected, reloaded, steps, start_fails;
+static int started, finished, disconnected, reloaded, steps, start_fails, shutdowns;
+static const char *start_error;
 static char started_port[8];
 static unsigned step_wait = 25;
 static void (*hook) (const char *);
@@ -35,6 +36,8 @@ int server_start (const server_options *o)
 }
 int server_step (unsigned max_wait_cs) { (void) max_wait_cs; steps++; return (int) step_wait; }
 void server_finish (void) { finished++; fake_status.listening = 0; }
+void server_shutdown (void) { shutdowns++; fake_status.listening = 0; }
+const char *server_start_error (void) { return start_fails ? start_error : NULL; }
 void server_disconnect (void) { disconnected++; fake_status.connected = 0; }
 int server_reload_logins (void) { reloaded++; return 0; }
 void server_get_status (server_status *st) { *st = fake_status; st->login_set = have_login; }
@@ -364,6 +367,11 @@ int main (void)
   CHECK (strstr (reported, "can't listen on port 80"), "a port that can't be used is reported");
   wimp_tick ();
   CHECK (strstr (wimp_icon_text (0, 0), "Not listening"), "and Status says so");
+  start_error = "The RDPServer module isn't loaded (!RDPServer's !Run loads it).";
+  reported[0] = 0;
+  CHECK (click (CHOICES, 9, Button_Select) == 0 && strstr (reported, "module isn't loaded"),
+         "the module's own reason is reported when it gives one");
+  start_error = NULL;
   start_fails = 0;
   click (-2, 3, Button_Adjust);
   started = 0;
@@ -381,8 +389,10 @@ int main (void)
   CHECK (wimp_event (User_Message, b) == 1, "Message_Quit ends the program");
   CHECK (choose (4) == 1, "and so does Quit");
   finished = 0;
+  shutdowns = 0;
   wimp_close ();
   CHECK (fake_calls (Wimp_CloseDown) == 1, "Wimp_CloseDown at the end");
+  CHECK (shutdowns == 1, "the server (and the module) let go of at the end");
 
   remove (settings);
   remove (log);

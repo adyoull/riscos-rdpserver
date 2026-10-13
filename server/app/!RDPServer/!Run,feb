@@ -1,6 +1,9 @@
 | !Run for !RDPServer (test build)
-| RDPServer is a UnixLib program converted to Absolute (AIF). It needs
-| SharedUnixLibrary and ARMEABISupport, and CryptRandom for its random
+| The server is a module, RDPSMod (title RDPServer), so it keeps going
+| while the desktop doesn't multitask (an error box, a program holding
+| the machine). The front end, RDPServer, is a UnixLib program converted
+| to Absolute (AIF): the icon bar icon, Status and Choices. It needs
+| SharedUnixLibrary and ARMEABISupport; both need CryptRandom for random
 | numbers (all three from PackMan).
 Set RDPServer$Dir <Obey$Dir>
 Set RDPServer$Choices <Choices$Write>.RDPServer
@@ -11,14 +14,16 @@ RMEnsure ARMEABISupport 0 IfThere System:Modules.ARMEABISupport Then RMLoad Syst
 RMEnsure ARMEABISupport 0 Error RDPServer needs the ARMEABISupport module. Install it with PackMan.
 RMEnsure CryptRandom 0.12 IfThere System:Modules.CryptRand Then RMLoad System:Modules.CryptRand
 RMEnsure CryptRandom 0.12 Error RDPServer needs the CryptRandom module (0.12 or later). Install it with PackMan.
-| It runs on the desktop: an icon on the icon bar (Select: Status, Adjust:
-| Choices, Menu: Info, Status, Choices, Disconnect, Quit). A 1920x1080
-| 32 bpp screen needs about 9 MB for the copy of the screen.
+| The module: loaded here, removed again when RDPServer quits. Its memory
+| is a dynamic area, "RDPServer" (a 1920x1080 32 bpp screen needs about
+| 9 MB for the copy of the screen).
+RMEnsure RDPServer 0.02 RMLoad <RDPServer$Dir>.RDPSMod
+RMEnsure RDPServer 0.02 Error RDPServer's module (RDPSMod) didn't load.
+| An icon on the icon bar (Select: Status, Adjust: Choices, Menu: Info,
+| Status, Choices, Disconnect, Quit).
 | Test builds pass -v: every mouse button and wheel event, and Shift, Ctrl
 | and Alt, go to the log, <Choices$Write>.RDPServer.Log (other keys are
 | logged without saying which, so a password typed remotely isn't kept).
-| To run it in a task window instead:
-|   TaskWindow "<RDPServer$Dir>.RDPServer -cli -v" -wimpslot 24000K
 IconSprites <RDPServer$Dir>.!Sprites
-WimpSlot -min 24000K
+WimpSlot -min 8000K
 Run <RDPServer$Dir>.RDPServer -v

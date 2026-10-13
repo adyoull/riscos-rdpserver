@@ -1,13 +1,14 @@
 /* RDPServer: command line.
 
-     RDPServer [-cli] [-p port] [-a address] [-i centiseconds] [-r rows]
+     RDPServer [-p port] [-a address] [-i centiseconds] [-r rows]
                [-t seconds] [-v]
      RDPServer -setlogin NAME PASSWORD
      RDPServer -clearlogin
 
-   -cli  on RISC OS, run in a task window rather than on the desktop
-         (the desktop version, with its icon bar icon, is the usual one;
-         Linux builds are always -cli)
+   On RISC OS this is the desktop front end: the server itself is the
+   RDPServer module (src/mod), which !Run loads; -p and -a don't apply
+   there (Choices has the port). The Linux builds run the server here, in
+   its thread (srvthread.h), for the tests.
    -p  port to listen on (3389; the desktop version uses Choices)
    -a  address to listen on (every interface)
    -i  time between screen scans, centiseconds (10)
@@ -37,19 +38,21 @@
 #include "wimp.h"
 #endif
 
-#define VERSION "0.1-test9"
+#define VERSION "0.2-test1"
 
+#ifndef __riscos
 static void
 on_signal (int sig)
 {
   (void) sig;
   server_stop = 1;
 }
+#endif
 
 static int
 usage (void)
 {
-  fprintf (stderr, "Usage: RDPServer [-cli] [-p port] [-a address] [-i centiseconds] "
+  fprintf (stderr, "Usage: RDPServer [-p port] [-a address] [-i centiseconds] "
            "[-r rows] [-t seconds] [-v]\n"
            "       RDPServer -setlogin NAME PASSWORD\n"
            "       RDPServer -clearlogin\n");
@@ -61,10 +64,9 @@ main (int argc, char **argv)
 {
   server_options o;
   char keys[512], ini[512], logins[512];
-  int i, cli = 1;
+  int i;
 #ifdef __riscos
   char settings[512], logfile[512], xrdplog[512];
-  cli = 0;
 #endif
 
   snprintf (logins, sizeof logins, "%s/logins", plat_choices_dir ());
@@ -96,8 +98,6 @@ main (int argc, char **argv)
       const char *v = i + 1 < argc ? argv[i + 1] : NULL;
       if (strcmp (a, "-v") == 0)
         o.verbose = 1;
-      else if (strcmp (a, "-cli") == 0)
-        cli = 1;
       else if (v && strcmp (a, "-p") == 0)
         o.port = argv[++i];
       else if (v && strcmp (a, "-a") == 0)
@@ -121,18 +121,15 @@ main (int argc, char **argv)
   o.logins = logins;
   snprintf (keys, sizeof keys, "%s/rsakeys.ini", plat_choices_dir ());
 #ifdef __riscos
-  if (!cli)
     {
-      /* The desktop version. Its messages go to Choices (Log, and
-         libxrdp's to XrdpLog) and its Status window. A client gets 10 s
-         to connect (libxrdp's connection sequence holds the desktop up
-         meanwhile), and the screen is read 128 rows at a time. */
+      /* The desktop front end. The server's messages go to Choices (Log,
+         and libxrdp's to XrdpLog) and the Status window. The screen is
+         read 128 rows at a time. */
       wimp_setup w;
       snprintf (settings, sizeof settings, "%s/Settings", plat_choices_dir ());
       snprintf (logfile, sizeof logfile, "%s/Log", plat_choices_dir ());
       snprintf (xrdplog, sizeof xrdplog, "%s/XrdpLog", plat_choices_dir ());
       o.log_file = xrdplog;
-      o.handshake_cs = 1000;
       if (o.rows_per_scan == 0)
         o.rows_per_scan = 128;
       if (access (keys, R_OK) != 0)
@@ -155,8 +152,7 @@ main (int argc, char **argv)
       w.log_file = logfile;
       return wimp_run (&w);
     }
-#endif
-  (void) cli;
+#else
 
   printf ("RDPServer " VERSION ": a test build. Standard RDP Security only "
           "(RC4, no TLS): use it on your own network.\n");
@@ -178,4 +174,5 @@ main (int argc, char **argv)
   /* A client that resets mid-send must not kill the server. */
   signal (SIGPIPE, SIG_IGN);
   return server_run (&o);
+#endif
 }

@@ -1,4 +1,4 @@
-RDPServer 0.1-test9 (test build)
+RDPServer 0.2-test1 (test build)
 ================================
 
 Lets you use this RISC OS desktop from another computer with Remote
@@ -25,8 +25,19 @@ hourglass showing. The icon changes while a client is connected.
   Adjust on the icon   Choices
   Menu on the icon     Info, Status..., Choices..., Disconnect, Quit
 
-It uses no time while nothing is happening; while a client is connected
-it looks for changes on the screen ten times a second.
+It uses almost no time while nothing is happening; while a client is
+connected it looks for changes on the screen ten times a second.
+
+The server itself is a module (RDPSMod, which !Run loads and Quit
+removes), so it goes on working when the desktop doesn't multitask:
+while an error box is open, the client still sees the screen (the box
+included) and can click the box's buttons; a program that keeps the
+machine to itself doesn't stop it either. It never holds the desktop up
+for more than a couple of centiseconds at a time, also while a client is
+connecting.
+
+Disconnect (on the icon's menu) drops the client at once, even one that
+is still connecting.
 
 Setting a login
 ---------------
@@ -77,26 +88,14 @@ What isn't done yet
 - Changing the screen mode while a client is connected disconnects it
   (connect again to get the new size).
 - One client at a time. A client that connects but doesn't finish
-  connecting within 10 seconds is dropped (30 with -cli); the desktop
-  waits for it meanwhile.
+  connecting within 30 seconds is dropped.
 
 Command line
 ------------
-It can also run in a task window, as test2 did (it then uses more of the
-computer's time, through UnixLib's select()):
-
-  *TaskWindow "<RDPServer$Dir>.RDPServer -cli -v" -wimpslot 24000K
-
-RDPServer [-cli] [-p port] [-a address] [-i centiseconds] [-r rows] [-v]
 RDPServer -setlogin NAME PASSWORD
 RDPServer -clearlogin
-  -cli  in a task window, not on the desktop (Escape stops it)
-  -p  port (3389; on the desktop, Choices sets it)
-  -a  listen only on this address
-  -i  how often to look for changes (10 = ten times a second)
-  -r  read only this many rows of the screen each time (desktop: 128;
-      -cli: all)
-  -v  more messages
+  set the one login clients must give, or let anyone connect (as
+  Choices does)
 
 Parts of this program were written with the help of an AI assistant.
 
