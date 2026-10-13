@@ -184,32 +184,6 @@ static void test_clicks (void)
   CHECK (plat_click (0x71, 2) == 0 && keyv_calls == calls + 2 && keyv_r0 == 1 && keyv_r1 == 0x71,
          "no ticker: down and straight back up");
   callafter_fail = 0;
-
-  /* Held buttons (drags): down, a watchdog, pushed back while we run. */
-  slot = (int *) (rma_block + 36);    /* a new block since finish */
-  calls = keyv_calls;
-  callafter_calls = 0;
-  plat_button_hold (0x70, 50);
-  CHECK (keyv_calls == calls + 1 && keyv_r0 == 2 && keyv_r1 == 0x70, "hold: Select down");
-  CHECK (callafter_calls == 1 && callafter_r[0] == 50 && callafter_r[2] == (int) (intptr_t) slot,
-         "with a 50 cs watchdog");
-  remove_calls = 0;
-  CHECK (plat_button_keep (0x70, 50) == 0 && remove_calls == 1 && callafter_calls == 2,
-         "keep: the watchdog is moved back (removed, set again)");
-  slot[1] = 0;                        /* it went off: a program held the desktop */
-  CHECK (plat_button_keep (0x70, 50) == -1, "keep reports that the watchdog let go");
-  calls = keyv_calls;
-  plat_button_release (0x70);
-  CHECK (keyv_calls == calls + 1 && keyv_r0 == 1 && keyv_r1 == 0x70, "release: KeyV up (harmless if already up)");
-  plat_button_hold (0x70, 50);
-  remove_calls = 0;
-  plat_button_release (0x70);
-  CHECK (remove_calls == 1 && slot[1] == 0, "release cancels a watchdog still waiting");
-  callafter_fail = 1;
-  plat_button_hold (0x71, 50);
-  CHECK (plat_button_keep (0x71, 50) == 0, "no ticker for the watchdog: held, not reported as let go");
-  callafter_fail = 0;
-  plat_button_release (0x71);
   plat_click_finish ();
 
   rma_fail = 1;

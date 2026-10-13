@@ -38,14 +38,6 @@ void plat_key (int low_level_key, int down);
    releases it itself). */
 int plat_click (int ll, unsigned up_after_cs);
 
-/* A button held down (not a click): pressed now, with a watchdog that
-   lets go of it after watch_cs unless plat_button_keep pushes it back;
-   plat_button_keep returns -1 if the watchdog has gone off (a program
-   stopped the desktop while it was held). plat_button_release lets go. */
-void plat_button_hold (int ll, unsigned watch_cs);
-int plat_button_keep (int ll, unsigned watch_cs);
-void plat_button_release (int ll);
-
 /* Cancels releases still waiting and does them now (when stopping). */
 void plat_click_finish (void);
 

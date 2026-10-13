@@ -128,38 +128,6 @@ plat_click_finish (void)
 {
 }
 
-/* RDPS_HOST_BLOCK_HOLD pretends a program stops the desktop while a
-   button is held (as !Folio's title bar does on RISC OS): the first time
-   the server asks to keep a button held, the watchdog has already let go. */
-static int held_watch;
-
-void
-plat_button_hold (int ll, unsigned watch_cs)
-{
-  (void) watch_cs;
-  plat_key (ll, 1);
-  held_watch = getenv ("RDPS_HOST_BLOCK_HOLD") != NULL;
-}
-
-int
-plat_button_keep (int ll, unsigned watch_cs)
-{
-  (void) watch_cs;
-  if (!held_watch)
-    return 0;
-  held_watch = 0;
-  logline ("watchdog %02X\n", ll, 0);
-  plat_key (ll, 0);
-  return -1;
-}
-
-void
-plat_button_release (int ll)
-{
-  held_watch = 0;
-  plat_key (ll, 0);
-}
-
 int
 plat_modifiers (void)
 {

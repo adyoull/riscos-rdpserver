@@ -71,13 +71,6 @@ typedef struct
 /* After this long without a change on the screen or input from the
    client, scan at the idle rate. */
 #define ACTIVE_CS 200
-/* A mouse button held down (a drag) is let go of by a ticker event if the
-   server hasn't run for this long: a program that loops while the button
-   is down without letting the desktop run (!Folio's title bar) would
-   otherwise wait for a button-up the server can't send. test7's 50 cs
-   cut short drags in programs that are merely slow (Folio's document
-   window); 150 cs. */
-#define WATCHDOG_CS 150
 /* -v logs any wait this long between steps while a client is connected. */
 #define GAP_LOG_CS 25
 
@@ -176,15 +169,7 @@ sink_key (void *ctx, int ll, int down)
       else
         say ("KeyV %s (a key)", down ? "down" : "up");
     }
-  if (ll >= 0x70 && ll <= 0x72)
-    {
-      if (down)
-        plat_button_hold (ll, WATCHDOG_CS);
-      else
-        plat_button_release (ll);
-    }
-  else
-    plat_key (ll, down);
+  plat_key (ll, down);
 }
 
 static int
@@ -666,17 +651,6 @@ step (unsigned max_wait_cs)
 
   if (!s->running)
     return 25;
-  /* Held buttons: push their watchdogs back, or notice they went off. */
-  {
-    int ll;
-    for (ll = 0x70; ll <= 0x72; ll++)
-      if (s->input.applied[ll] && plat_button_keep (ll, WATCHDOG_CS) != 0)
-        {
-          s->input.applied[ll] = 0;
-          say ("a program stopped the desktop while mouse button &%02X was "
-               "held (its own drag?): let go of it after %d cs", ll, WATCHDOG_CS);
-        }
-  }
   maxfd = (int) s->listener->sck;
   FD_ZERO (&rd);
   FD_ZERO (&wr);

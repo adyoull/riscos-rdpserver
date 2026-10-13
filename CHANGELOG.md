@@ -1,5 +1,14 @@
 # Changelog
 
+## RDPServer 0.1-test9 (13 October 2026)
+
+- The held-button watchdog (test7, test8) is gone: Folio 0.0.1-test32
+  fixed the window drag that needed it, and it could cut short a slow
+  program's drag. Clicks are as in test6 (the release by ticker event);
+  drags and held buttons go down and up as the client sends them.
+- Kept from test8: `-v` logs waits of 25 cs or more between the server's
+  turns, and the longest wait every 5 s.
+
 ## RDPServer 0.1-test8 (13 October 2026)
 
 - test7's log: dragging Folio's document window, the watchdog let go
