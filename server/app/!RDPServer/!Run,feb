@@ -11,7 +11,14 @@ RMEnsure ARMEABISupport 0 IfThere System:Modules.ARMEABISupport Then RMLoad Syst
 RMEnsure ARMEABISupport 0 Error RDPServer needs the ARMEABISupport module. Install it with PackMan.
 RMEnsure CryptRandom 0.12 IfThere System:Modules.CryptRand Then RMLoad System:Modules.CryptRand
 RMEnsure CryptRandom 0.12 Error RDPServer needs the CryptRandom module (0.12 or later). Install it with PackMan.
-| It runs in a task window; press Escape there to stop it. A 1920x1080
+| It runs on the desktop: an icon on the icon bar (Select: Status, Adjust:
+| Choices, Menu: Info, Status, Choices, Disconnect, Quit). A 1920x1080
 | 32 bpp screen needs about 9 MB for the copy of the screen.
-| Test builds pass -v: every mouse button, key and wheel event is shown.
-TaskWindow "<RDPServer$Dir>.RDPServer -v" -wimpslot 24000K -name "RDPServer" -display
+| Test builds pass -v: every mouse button and wheel event, and Shift, Ctrl
+| and Alt, go to the log, <Choices$Write>.RDPServer.Log (other keys are
+| logged without saying which, so a password typed remotely isn't kept).
+| To run it in a task window instead:
+|   TaskWindow "<RDPServer$Dir>.RDPServer -cli -v" -wimpslot 24000K
+IconSprites <RDPServer$Dir>.!Sprites
+WimpSlot -min 24000K
+Run <RDPServer$Dir>.RDPServer -v

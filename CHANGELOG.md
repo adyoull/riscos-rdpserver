@@ -1,5 +1,31 @@
 # Changelog
 
+## RDPServer 0.1-test3 (13 October 2026)
+
+- A desktop program now, not a task window. test2 used about 70% of the
+  Pi's time: in a task window, UnixLib's `select()` busy-waits through its
+  timeout. Now the server runs from the Wimp poll loop and sleeps in
+  `Wimp_PollIdle` until it next needs to look at the screen or the
+  network (at most every 2 cs while a client is connected, 25 cs when
+  idle). While the client is behind, it waits 2 cs rather than polling.
+- Icon bar icon (a different picture while a client is connected); menu
+  with Info, Status..., Choices..., Disconnect, Quit. Status shows the
+  state, the client, and the last messages. Choices sets the port and the
+  user name and password (Save, Clear login), as asked for in test2.
+- The screen is read 128 rows per step on the desktop, the scan period is
+  10 cs while things change and 25 cs after 2 s without a change, and a
+  client gets 10 s to finish connecting (the desktop waits meanwhile).
+- Clicks acting as Shift-clicks: the test2 log shows the client sent no
+  Shift, so RISC OS itself must have had Shift held. Before each button
+  goes down, the server now reads Shift, Ctrl and Alt (OS_Byte 121) and,
+  if RISC OS has one held that the client didn't press, releases it
+  (KeyV) and says so in the log. A Shift-click from the client keeps its
+  Shift.
+- `-v` no longer names ordinary keys in the log (only Shift, Ctrl, Alt,
+  the locks and mouse buttons), so a password typed remotely isn't kept.
+- Messages go to Choices:RDPServer.Log, libxrdp's to XrdpLog. `-cli` runs
+  it in a task window as before.
+
 ## RDPServer 0.1-test2 (13 October 2026)
 
 - Clicks: the Pi showed a left click acting oddly (a double-click opened

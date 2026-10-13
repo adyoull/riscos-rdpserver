@@ -31,6 +31,14 @@ void plat_mouse_to (const rdps_screen *s, int x, int y);
    low-level internal key number (PRM p1247; mouse buttons &70-&72). */
 void plat_key (int low_level_key, int down);
 
+/* Which of Shift, Ctrl and Alt RISC OS thinks are held down (by any
+   keyboard: ours or one plugged in), as PLAT_SHIFT | PLAT_CTRL | PLAT_ALT,
+   with the keyboard status byte (OS_Byte 202) in bits 8-15. */
+#define PLAT_SHIFT 1
+#define PLAT_CTRL 2
+#define PLAT_ALT 4
+int plat_modifiers (void);
+
 /* Turns the scroll wheel: dz notches (negative = up/away), dw notches
    sideways (positive = right). */
 void plat_wheel (int dz, int dw);

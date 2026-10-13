@@ -1,14 +1,18 @@
 /* RDPServer: command line.
 
-     RDPServer [-p port] [-a address] [-i centiseconds] [-r rows]
+     RDPServer [-cli] [-p port] [-a address] [-i centiseconds] [-r rows]
                [-t seconds] [-v]
      RDPServer -setlogin NAME PASSWORD
      RDPServer -clearlogin
 
-   -p  port to listen on (3389)
+   -cli  on RISC OS, run in a task window rather than on the desktop
+         (the desktop version, with its icon bar icon, is the usual one;
+         Linux builds are always -cli)
+   -p  port to listen on (3389; the desktop version uses Choices)
    -a  address to listen on (every interface)
    -i  time between screen scans, centiseconds (10)
-   -r  rows of the screen read each scan (0, the default: all of them)
+   -r  rows of the screen read each scan (0: all of them; the default
+       on the desktop is 128, so no one step holds the desktop up)
    -t  stop after this many seconds (for tests)
    -v  say more (each input event)
    -setlogin    set the one user name and password clients must give
@@ -25,8 +29,13 @@
 #include "keygen.h"
 #include "auth.h"
 #include "server.h"
+#ifdef __riscos
+#include <kernel.h>
+#include <swis.h>
+#include "wimp.h"
+#endif
 
-#define VERSION "0.1-test2"
+#define VERSION "0.1-test3"
 
 static void
 on_signal (int sig)
@@ -38,7 +47,7 @@ on_signal (int sig)
 static int
 usage (void)
 {
-  fprintf (stderr, "Usage: RDPServer [-p port] [-a address] [-i centiseconds] "
+  fprintf (stderr, "Usage: RDPServer [-cli] [-p port] [-a address] [-i centiseconds] "
            "[-r rows] [-t seconds] [-v]\n"
            "       RDPServer -setlogin NAME PASSWORD\n"
            "       RDPServer -clearlogin\n");
@@ -50,7 +59,11 @@ main (int argc, char **argv)
 {
   server_options o;
   char keys[512], ini[512], logins[512];
-  int i;
+  int i, cli = 1;
+#ifdef __riscos
+  char settings[512], logfile[512], xrdplog[512];
+  cli = 0;
+#endif
 
   snprintf (logins, sizeof logins, "%s/logins", plat_choices_dir ());
   if (argc == 4 && strcmp (argv[1], "-setlogin") == 0)
@@ -81,6 +94,8 @@ main (int argc, char **argv)
       const char *v = i + 1 < argc ? argv[i + 1] : NULL;
       if (strcmp (a, "-v") == 0)
         o.verbose = 1;
+      else if (strcmp (a, "-cli") == 0)
+        cli = 1;
       else if (v && strcmp (a, "-p") == 0)
         o.port = argv[++i];
       else if (v && strcmp (a, "-a") == 0)
@@ -97,13 +112,51 @@ main (int argc, char **argv)
   if (o.interval_cs == 0)
     o.interval_cs = 1;
 
-  printf ("RDPServer " VERSION ": a test build. Standard RDP Security only "
-          "(RC4, no TLS): use it on your own network.\n");
-
   snprintf (ini, sizeof ini, "%s/xrdp.ini", plat_resources_dir ());
   o.ini = ini;
   o.logins = logins;
   snprintf (keys, sizeof keys, "%s/rsakeys.ini", plat_choices_dir ());
+#ifdef __riscos
+  if (!cli)
+    {
+      /* The desktop version. Its messages go to Choices (Log, and
+         libxrdp's to XrdpLog) and its Status window. A client gets 10 s
+         to connect (libxrdp's connection sequence holds the desktop up
+         meanwhile), and the screen is read 128 rows at a time. */
+      wimp_setup w;
+      snprintf (settings, sizeof settings, "%s/Settings", plat_choices_dir ());
+      snprintf (logfile, sizeof logfile, "%s/Log", plat_choices_dir ());
+      snprintf (xrdplog, sizeof xrdplog, "%s/XrdpLog", plat_choices_dir ());
+      o.log_file = xrdplog;
+      o.handshake_cs = 1000;
+      if (o.rows_per_scan == 0)
+        o.rows_per_scan = 128;
+      if (access (keys, R_OK) != 0)
+        {
+          /* Once only; it can take a minute. */
+          _swix (Hourglass_On, 0);
+          i = rdps_keygen (keys);
+          _swix (Hourglass_Off, 0);
+          if (i != 0)
+            {
+              wimp_report ("RDPServer couldn't make or save its key in Choices.");
+              return 1;
+            }
+        }
+      signal (SIGPIPE, SIG_IGN);
+      w.opt = &o;
+      w.version = VERSION;
+      w.settings_file = settings;
+      w.logins_file = logins;
+      w.log_file = logfile;
+      return wimp_run (&w);
+    }
+#endif
+  (void) cli;
+
+  printf ("RDPServer " VERSION ": a test build. Standard RDP Security only "
+          "(RC4, no TLS): use it on your own network.\n");
+
   if (access (keys, R_OK) != 0)
     {
       printf ("Making this server's key (once only; it can take a minute)...\n");

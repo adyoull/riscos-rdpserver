@@ -25,7 +25,8 @@ PORT=${PORT:-33899}
 DISP=${DISP:-:97}
 rm -rf "$OUT"; mkdir -p "$OUT"
 export RDPS_RESOURCES="$PWD/app/!RDPServer" RDPS_CHOICES="$OUT" \
-       RDPS_HOST_INPUT_LOG="$OUT/input.log" RDPS_HOST_STILL=1 DISPLAY=$DISP
+       RDPS_HOST_INPUT_LOG="$OUT/input.log" RDPS_HOST_STILL=1 DISPLAY=$DISP \
+       RDPS_HOST_STUCK_SHIFT=1   # as the Pi had with test2: see below
 fails=0
 ok () { echo "ok   $1"; }
 bad () { echo "FAIL $1"; fails=$((fails + 1)); }
@@ -84,6 +85,10 @@ run_client () {  # name command...
     xdotool key a >/dev/null 2>&1; sleep 1
     xdotool click 4 >/dev/null 2>&1; sleep 1        # wheel up
     xdotool click 5 click 5 >/dev/null 2>&1; sleep 1  # wheel down twice
+    # A Shift-click the client means: Shift must stay down for it.
+    xdotool keydown Shift_L >/dev/null 2>&1; sleep 1
+    xdotool click 1 >/dev/null 2>&1; sleep 1
+    xdotool keyup Shift_L >/dev/null 2>&1; sleep 1
     # Held down when the client goes: the server must let go.
     xdotool keydown Shift_L >/dev/null 2>&1; sleep 1
   fi
@@ -108,11 +113,21 @@ grep -q "^key 70 down$" "$OUT/input.log" && grep -q "^key 70 up$" "$OUT/input.lo
 # The move reaches RISC OS before the button goes down.
 awk '/^mouse 200 150$/ && !m {m=NR} /^key 70 down$/ && !d {d=NR} END {exit !(m && d && m < d)}' "$OUT/input.log" \
   && ok "the pointer moves before the button goes down" || bad "button before the move"
+# RISC OS thought Shift was held (RDPS_HOST_STUCK_SHIFT): the server lets
+# go of it before the first click, but not before the Shift-click.
+awk '/^key 4C up$/ && !u {u=NR} /^key 70 down$/ && !d {d=NR} END {exit !(u && d && u < d)}' "$OUT/input.log" \
+  && ok "a Shift RISC OS thought held is let go of before the click" || bad "stuck Shift not released before the click"
+[ "$(grep -c "Shift was held on RISC OS" "$OUT/server.log")" -eq 1 ] \
+  && ok "and only then: the client's own Shift-click keeps its Shift" || bad "Shift released $(grep -c "Shift was held on RISC OS" "$OUT/server.log") times"
+awk '/^key 4C down$/ {s=1} /^key 4C up$/ {s=0} /^key 70 down$/ && s {ok=1} END {exit !ok}' "$OUT/input.log" \
+  && ok "Shift is down when the Shift-click's button goes down" || bad "the Shift-click lost its Shift"
 grep -q "^wheel -1 0$" "$OUT/input.log" && [ "$(grep -c "^wheel 1 0$" "$OUT/input.log")" -eq 2 ] \
   && ok "wheel: one notch up (-1), two down (+1 each)" || bad "wheel: $(grep wheel "$OUT/input.log" | tr '\n' ' ')"
 grep -q "^clients 1$" "$OUT/input.log" && ok "RDPServer\$Clients set while connected" || bad "RDPServer\$Clients not set"
 grep -q "^key 3C down$" "$OUT/input.log" && grep -q "^key 3C up$" "$OUT/input.log" \
   && ok "A key: low-level &3C down and up" || bad "A key not seen"
+grep -q "KeyV down (a key)" "$OUT/server.log" && ! grep -q "&3C\|scancode &1E" "$OUT/server.log" \
+  && ok "-v logs that a key was pressed, not which" || bad "the log names ordinary keys"
 grep -q "^key 4C down$" "$OUT/input.log" && [ "$(grep "^key 4C" "$OUT/input.log" | tail -1)" = "key 4C up" ] \
   && ok "Shift held when the client went: released" || bad "Shift left pressed: $(grep "^key 4C" "$OUT/input.log" | tr '\n' ' ')"
 

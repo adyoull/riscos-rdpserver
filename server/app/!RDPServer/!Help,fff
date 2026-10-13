@@ -1,4 +1,4 @@
-RDPServer 0.1-test2 (test build)
+RDPServer 0.1-test3 (test build)
 ================================
 
 Lets you use this RISC OS desktop from another computer with Remote
@@ -13,27 +13,35 @@ router, and quit it when you've finished testing.
 Needs: SharedUnixLibrary, ARMEABISupport and CryptRandom (PackMan), and a
 desktop mode with thousands or millions of colours (16 or 32 bpp).
 
-Setting a login
----------------
-Until you set one, anyone who can reach port 3389 can connect. To set the
-user name and password clients must give: run !RDPServer once (so
-RDPServer$Dir is set), quit it, then at the command line (F12):
-
-  *<RDPServer$Dir>.RDPServer -setlogin andrew mysecret
-
-To remove it again:  *<RDPServer$Dir>.RDPServer -clearlogin
-
-The password isn't stored, only a salted SHA-256 of it (in
-Choices:RDPServer.logins). After a wrong password, new connections are
-turned away for 3 seconds. A desktop front end with a Choices window
-will replace these commands.
-
 Using it
 --------
-Double-click !RDPServer. A task window opens and says "listening on port
-3389". The first time, it makes this computer's key first (stored in
-Choices:RDPServer), which can take a minute.
+Double-click !RDPServer. Its icon appears on the icon bar, and it
+listens on port 3389. The first time, it makes this computer's key
+(stored in Choices:RDPServer); that can take a minute, with the
+hourglass showing. The icon changes while a client is connected.
 
+  Select on the icon   the Status window: what it's doing, who's
+                       connected, and its last few messages
+  Adjust on the icon   Choices
+  Menu on the icon     Info, Status..., Choices..., Disconnect, Quit
+
+It uses no time while nothing is happening; while a client is connected
+it looks for changes on the screen ten times a second.
+
+Setting a login
+---------------
+Until you set one, anyone who can reach the port can connect. In
+Choices, type a user name and a password and click Save (or press
+Return). Clients must then give them. To change the password, type a new
+one; to let anyone connect again, click Clear login (it takes effect
+straight away). The password isn't stored, only a salted SHA-256 of it
+(Choices:RDPServer.logins). After a wrong password, new connections are
+turned away for 3 seconds.
+
+Choices also sets the port. Changing it disconnects a connected client.
+
+Connecting
+----------
 On the other computer, connect to this computer's IP address:
   Windows:   mstsc /v:192.168.1.50
              (if it asks, choose to connect anyway: the server's
@@ -44,13 +52,14 @@ On the other computer, connect to this computer's IP address:
 The client gets the RISC OS screen at its own size. Mouse: left is
 Select, middle is Menu, right is Adjust; the scroll wheel works where a
 local USB mouse's wheel does. The keyboard works by key position, with
-RISC OS's keyboard layout.
+RISC OS's keyboard layout. Keys go to whichever window has the input
+focus on RISC OS.
 
-Keys go to whichever window has the input focus on RISC OS. If that's
-RDPServer's own task window, typing goes into it, and Escape stops the
-server: from the remote computer, click in another window first.
-
-To stop it, press Escape in its task window, or close the window.
+Test builds write a log, Choices:RDPServer.Log (and libxrdp's own,
+XrdpLog): every mouse button and wheel event, and Shift, Ctrl and Alt.
+Other keys are logged without saying which, so nothing you type is kept.
+If a click behaves as if Shift were held, the log says what RISC OS
+thought was held at the time; please send it.
 
 What isn't done yet
 -------------------
@@ -66,15 +75,25 @@ What isn't done yet
 - Changing the screen mode while a client is connected disconnects it
   (connect again to get the new size).
 - One client at a time. A client that connects but doesn't finish
-  connecting within 30 seconds is dropped.
+  connecting within 10 seconds is dropped (30 with -cli); the desktop
+  waits for it meanwhile.
 
 Command line
 ------------
-RDPServer [-p port] [-a address] [-i centiseconds] [-r rows] [-v]
-  -p  port (3389)
+It can also run in a task window, as test2 did (it then uses more of the
+computer's time, through UnixLib's select()):
+
+  *TaskWindow "<RDPServer$Dir>.RDPServer -cli -v" -wimpslot 24000K
+
+RDPServer [-cli] [-p port] [-a address] [-i centiseconds] [-r rows] [-v]
+RDPServer -setlogin NAME PASSWORD
+RDPServer -clearlogin
+  -cli  in a task window, not on the desktop (Escape stops it)
+  -p  port (3389; on the desktop, Choices sets it)
   -a  listen only on this address
   -i  how often to look for changes (10 = ten times a second)
-  -r  read only this many rows of the screen each time (all)
+  -r  read only this many rows of the screen each time (desktop: 128;
+      -cli: all)
   -v  more messages
 
 Parts of this program were written with the help of an AI assistant.

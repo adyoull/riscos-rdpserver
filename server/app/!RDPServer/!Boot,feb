@@ -1,2 +1,3 @@
 | !Boot for !RDPServer
-Set RDPServer$Dir <Obey$Dir>
+If "<RDPServer$Dir>"="" Then Set RDPServer$Dir <Obey$Dir>
+IconSprites <Obey$Dir>.!Sprites

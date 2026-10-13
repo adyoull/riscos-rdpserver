@@ -12,7 +12,7 @@ include $(RCD_DIR)/riscos.mk
 .DEFAULT_GOAL := all
 
 VERSION := 0.1
-TESTSUFFIX := -test2
+TESTSUFFIX := -test3
 B := build
 X := $(B)/xrdp
 M := $(B)/upstream/mbedtls
@@ -31,7 +31,7 @@ XRDP_FLAGS := -w
 
 # --- RISC OS ---------------------------------------------------------------
 RO := $(B)/riscos
-RO_OBJ := $(patsubst %.c,$(RO)/%.o,$(notdir $(XRDP_SRC) $(OUR_SRC))) $(RO)/plat_riscos.o
+RO_OBJ := $(patsubst %.c,$(RO)/%.o,$(notdir $(XRDP_SRC) $(OUR_SRC))) $(RO)/plat_riscos.o $(RO)/wimp.o
 RO_MBED := $(patsubst %.c,$(RO)/mbed/%.o,$(notdir $(MBED_SRC)))
 RO_CFLAGS := $(RISCOS_CFLAGS) -ffile-prefix-map=$(CURDIR)=rdpserver $(INC)
 
@@ -54,15 +54,22 @@ $(RO)/rdpserver: $(RO_OBJ) $(RO)/libmbedcrypto.a | riscos-toolchain-present
 
 checks: $(RO)/rdpserver
 	$(CHECK_ALL) $(RO)/rdpserver
-	$(CHECK_UNALIGNED) $(INC) $(OUR_SRC) src/plat_riscos.c
+	$(CHECK_UNALIGNED) $(INC) $(OUR_SRC) src/plat_riscos.c src/wimp.c
 
 APP_FILES := !Run,feb !Boot,feb !Help,fff xrdp.ini
-$(B)/RDPServer-$(VERSION)$(TESTSUFFIX).zip: $(RO)/rdpserver app/Licences-head.txt $(addprefix app/!RDPServer/,$(APP_FILES)) | checks
+ICONS := app/icons/rdpserver.png app/icons/sm-rdpserver.png app/icons/rdpserver-on.png
+# The icons: drawn by tools/mkicons.py, made into a sprite file here.
+$(B)/Sprites,ff9: $(ICONS)
+	$(PNG2SPRITE) $@ '!rdpserver=app/icons/rdpserver.png' \
+	  'sm!rdpserver=app/icons/sm-rdpserver.png' 'rdpserver-on=app/icons/rdpserver-on.png'
+
+$(B)/RDPServer-$(VERSION)$(TESTSUFFIX).zip: $(RO)/rdpserver $(B)/Sprites,ff9 app/Licences-head.txt $(addprefix app/!RDPServer/,$(APP_FILES)) | checks
 	rm -rf $(B)/app && mkdir -p '$(B)/app/!RDPServer'
 	$(RO_STRIP) -o $(RO)/rdpserver.stripped $(RO)/rdpserver
 	$(ELF2AIF) -e $(RO)/rdpserver.stripped '$(B)/app/!RDPServer/RDPServer,ff8' >/dev/null
 	cp 'app/!RDPServer/!Run,feb' 'app/!RDPServer/!Boot,feb' 'app/!RDPServer/!Help,fff' '$(B)/app/!RDPServer/'
 	cp 'app/!RDPServer/xrdp.ini' '$(B)/app/!RDPServer/xrdp.ini,fff'
+	cp '$(B)/Sprites,ff9' '$(B)/app/!RDPServer/!Sprites,ff9'
 	cat app/Licences-head.txt $(B)/upstream/xrdp/COPYING > '$(B)/app/!RDPServer/Licences,fff'
 	rm -f $@
 	$(ROZIP) $@ -C $(B)/app '!RDPServer'
@@ -117,7 +124,7 @@ T := $(B)/tests
 UNIT_SRC := tests/test_units.c src/input.c src/auth.c src/pixels.c src/capture.c src/keymap.c src/keygen.c \
             src/ssl_calls.c src/os_calls.c
 
-check: checks test-units test-units-qemu test-fake
+check: checks test-units test-units-qemu test-fake test-fake-wimp
 
 $(T):
 	mkdir -p $(T)
@@ -134,7 +141,12 @@ test-fake: $(T)/fake
 $(T)/fake: tests/test_fake.c src/plat_riscos.c src/platform.h $(FAKE_SRC) | $(T)
 	$(FAKE_CC) $(FAKE_CFLAGS) -o $@ tests/test_fake.c src/plat_riscos.c $(FAKE_SRC)
 
+test-fake-wimp: $(T)/fake-wimp
+	$(T)/fake-wimp
+$(T)/fake-wimp: tests/test_fake_wimp.c src/wimp.c src/wimp.h src/server.h $(FAKE_SRC) | $(T)
+	$(FAKE_CC) $(FAKE_CFLAGS) -Isrc -o $@ tests/test_fake_wimp.c src/wimp.c $(FAKE_SRC)
+
 clean:
 	rm -rf $(RO) $(HO) $(QO) $(B)/app $(B)/*.zip $(B)/tests
 
-.PHONY: all host qemu check checks test-units test-units-qemu test-fake clean
+.PHONY: all host qemu check checks test-units test-units-qemu test-fake test-fake-wimp clean

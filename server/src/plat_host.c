@@ -100,10 +100,24 @@ plat_mouse_to (const rdps_screen *s, int x, int y)
   logline ("mouse %d %d\n", x, y);
 }
 
+/* RDPS_HOST_STUCK_SHIFT pretends RISC OS thinks Shift is held (as the
+   Pi did with test2) until a Shift key is released. */
+static int shift_down = -1;
+
 void
 plat_key (int low_level_key, int down)
 {
   logline (down ? "key %02X down\n" : "key %02X up\n", low_level_key, 0);
+  if (low_level_key == 0x4C || low_level_key == 0x58)
+    shift_down = down;
+}
+
+int
+plat_modifiers (void)
+{
+  if (shift_down < 0)
+    shift_down = getenv ("RDPS_HOST_STUCK_SHIFT") != NULL;
+  return shift_down ? PLAT_SHIFT : 0;
 }
 
 void

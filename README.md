@@ -3,15 +3,16 @@
 An RDP server for RISC OS, so the RISC OS desktop can be used from the
 Remote Desktop clients built into Windows, macOS, iOS, Android and Linux.
 
-**Status: first test build (0.1-test1).** It works with real RDP clients
-on Linux (rdesktop, FreeRDP) against a pretend screen; it hasn't run on
-RISC OS yet. What's here:
+**Status: test builds (0.1-test3).** Connects from Windows App on a Pi 4
+running RISC OS 5; tested on Linux with rdesktop and FreeRDP. What's here:
 
-- `server/`: **RDPServer 0.1-test1**, built on xrdp's libxrdp. Standard
-  RDP Security only (RC4: TLS waits for AcornSSL to work as a server),
+- `server/`: **RDPServer 0.1-test3**, built on xrdp's libxrdp. A desktop
+  program (icon bar icon, Status and Choices windows). Standard RDP
+  Security only (RC4: TLS waits for AcornSSL to work as a server),
   classic RDP bitmaps (interleaved RLE, 32 bpp planar) at 8, 15, 16, 24 and
-  32 bpp, changed 64x64 tiles only, mouse and keyboard. One client at a
-  time; no password yet. For your own network only.
+  32 bpp, changed 64x64 tiles only, mouse, scroll wheel and keyboard, a
+  user name and password set in Choices. One client at a time. For your
+  own network only.
 
 - `docs/DESIGN.md`: the plan: libxrdp (from xrdp) for the protocol,
   AcornSSL for TLS, the screen read and compared in tiles, input through
@@ -28,7 +29,7 @@ and for the Linux tests Xvfb, rdesktop, xfreerdp3, ImageMagick and xdotool.
 ```sh
 cd server
 tools/fetch.sh                                    # xrdp and Mbed TLS, patched
-make RCD_DIR=/path/to/riscos-crossdev             # build/RDPServer-0.1-test1.zip
+make RCD_DIR=/path/to/riscos-crossdev             # build/RDPServer-0.1-test3.zip
 make RCD_DIR=/path/to/riscos-crossdev host qemu check
 tests/e2e.sh                                      # real clients, Linux build
 RCD_DIR=/path/to/riscos-crossdev QEMU=1 tests/e2e.sh   # ARM build, alignment traps on

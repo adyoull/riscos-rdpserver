@@ -55,6 +55,30 @@ static const _kernel_oserror *setvarval (int swi, int r[10])
   return NULL;
 }
 
+/* OS_Byte 121 (one key, X = internal key EOR &80) and 202. */
+static int held[3], kbstatus = 0x30, byte202_r2 = -1;
+static const _kernel_oserror *byte (int swi, int r[10])
+{
+  (void) swi;
+  if (r[0] == 121)
+    {
+      int k = r[1] ^ 0x80;
+      if (k < 0 || k > 2)
+        abort ();
+      r[1] = held[k] ? 0xff : 0;
+      return NULL;
+    }
+  if (r[0] == 202)
+    {
+      byte202_r2 = r[2];
+      if (r[1] != 0 || r[2] != 0xff)
+        abort ();          /* must only read, never change it */
+      r[1] = kbstatus;
+      return NULL;
+    }
+  abort ();
+}
+
 static const _kernel_oserror *callavector (int swi, int r[10])
 {
   (void) swi;
@@ -81,6 +105,7 @@ int main (void)
   fake_swi (OS_Word, "OS_Word", word);
   fake_swi (OS_CallAVector, "OS_CallAVector", callavector);
   fake_swi (OS_SetVarVal, "OS_SetVarVal", setvarval);
+  fake_swi (OS_Byte, "OS_Byte", byte);
 
   CHECK (plat_screen (&s) == NULL, "the screen is read");
   CHECK (s.width == 1920 && s.height == 1080, "1920 x 1080 from the window limits");
@@ -106,6 +131,16 @@ int main (void)
   CHECK (ptrv_calls == 1 && ptrv_r[0] == 9 && ptrv_r[1] == -2 && ptrv_r[2] == 0
          && ptrv_r[3] == 1, "wheel: PointerV 9, dz in R1, buttons 0 in R2, dw in R3");
   CHECK (keyv_calls == 2, "the wheel doesn't touch KeyV");
+
+  CHECK (plat_modifiers () == (0x30 << 8), "nothing held: 0, status byte in bits 8-15");
+  CHECK (byte202_r2 == 0xff, "OS_Byte 202 reads (R1 0, R2 &FF)");
+  held[0] = 1;
+  CHECK (plat_modifiers () == (PLAT_SHIFT | (0x30 << 8)), "Shift: OS_Byte 121, &80");
+  held[0] = 0; held[1] = 1;
+  CHECK ((plat_modifiers () & 7) == PLAT_CTRL, "Ctrl: &81");
+  held[1] = 0; held[2] = 1;
+  CHECK ((plat_modifiers () & 7) == PLAT_ALT, "Alt: &82");
+  held[2] = 0;
 
   plat_set_clients (1);
   CHECK (strcmp (var_name, "RDPServer$Clients") == 0 && strcmp (var_val, "1") == 0,

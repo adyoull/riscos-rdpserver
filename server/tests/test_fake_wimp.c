@@ -1,0 +1,391 @@
+/* RDPServer: the desktop front end (src/wimp.c) on Linux, against the Fake
+   RISC OS. Each Wimp SWI it uses is faked here, recording what it asked
+   for; the server and the logins are stand-ins, so the test can say
+   what state the server is in and check what the front end does with it.
+
+   Copyright (c) 2026 Andrew Youll. MIT licence (see LICENSE). */
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include "fake.h"
+#include "swis.h"
+#include "wimp.h"
+#include "auth.h"
+#include "platform.h"
+
+/* --- stand-ins for the server, the logins and the platform ---------------- */
+
+static server_status fake_status;
+static int started, finished, disconnected, reloaded, steps, start_fails;
+static char started_port[8];
+static unsigned step_wait = 25;
+static void (*hook) (const char *);
+static char saved_name[64], saved_pass[64];
+static int have_login;
+
+int server_start (const server_options *o)
+{
+  started++;
+  snprintf (started_port, sizeof started_port, "%s", o->port);
+  if (start_fails)
+    return 1;
+  fake_status.listening = 1;
+  return 0;
+}
+int server_step (unsigned max_wait_cs) { (void) max_wait_cs; steps++; return (int) step_wait; }
+void server_finish (void) { finished++; fake_status.listening = 0; }
+void server_disconnect (void) { disconnected++; fake_status.connected = 0; }
+int server_reload_logins (void) { reloaded++; return 0; }
+void server_get_status (server_status *st) { *st = fake_status; st->login_set = have_login; }
+void server_set_message_hook (void (*h) (const char *)) { hook = h; }
+
+int auth_load (const char *file, auth_db *db)
+{
+  (void) file;
+  memset (db, 0, sizeof *db);
+  if (have_login)
+    {
+      db->count = 1;
+      snprintf (db->login[0].name, sizeof db->login[0].name, "%s", saved_name);
+    }
+  return 0;
+}
+int auth_check (const auth_db *db, const char *n, const char *p) { (void) db; (void) n; (void) p; return 0; }
+int auth_set (const char *file, const char *name, const char *password)
+{
+  (void) file;
+  if (strchr (name, ' '))
+    return -1;
+  snprintf (saved_name, sizeof saved_name, "%s", name);
+  snprintf (saved_pass, sizeof saved_pass, "%s", password);
+  have_login = 1;
+  return 0;
+}
+
+static unsigned now = 100000;
+unsigned plat_time_cs (void) { return now; }
+
+/* --- the fake Wimp ------------------------------------------------------- */
+
+#define FIRST_WINDOW 0x2a000
+static int windows, window_icons[8];
+static int *window_blocks[8];
+static int bar_block[9], bar_icon_calls;
+static int opened_window, open_calls, closed_window;
+static int redraws, last_redraw[4], bar_redraws;
+static const char *menu_ptr;
+static int menu_x, menu_y, menu_calls;
+static char reported[256];
+static int caret[6], processed_key = -1, pointer_buttons;
+static int store[8][22 + 8 * 10];
+
+static const _kernel_oserror *wimp (int swi, int r[10])
+{
+  int *b = (int *) r[1];
+  switch (swi)
+    {
+    case Wimp_Initialise:
+      CHECK (r[1] == 0x4B534154 && strcmp ((const char *) r[2], "RDPServer") == 0,
+             "Wimp_Initialise: \"TASK\", RDPServer");
+      r[0] = 380; r[1] = 0x1234;
+      return NULL;
+    case Wimp_CreateIcon:
+      memcpy (bar_block, b, sizeof bar_block);
+      bar_icon_calls++;
+      r[0] = 3;
+      return NULL;
+    case Wimp_CreateWindow:
+      memcpy (store[windows], b, sizeof store[windows]);
+      window_blocks[windows] = store[windows];
+      window_icons[windows] = b[21];
+      r[0] = FIRST_WINDOW + windows++;
+      return NULL;
+    case Wimp_GetWindowState:
+      return NULL;
+    case Wimp_OpenWindow:
+      opened_window = b[0];
+      open_calls++;
+      return NULL;
+    case Wimp_CloseWindow:
+      closed_window = b[0];
+      return NULL;
+    case Wimp_SetIconState:
+      memcpy (last_redraw, b, sizeof last_redraw);
+      redraws++;
+      if (b[0] == -2 && b[1] == 3)
+        bar_redraws++;
+      return NULL;
+    case Wimp_CreateMenu:
+      menu_ptr = (const char *) b;
+      menu_x = r[2]; menu_y = r[3];
+      menu_calls++;
+      return NULL;
+    case Wimp_SetCaretPosition:
+      memcpy (caret, r, sizeof caret);
+      return NULL;
+    case Wimp_GetCaretPosition:
+      b[0] = caret[0]; b[1] = caret[1]; b[5] = caret[5];
+      return NULL;
+    case Wimp_ProcessKey:
+      processed_key = r[0];
+      return NULL;
+    case Wimp_GetPointerInfo:
+      b[2] = pointer_buttons;
+      return NULL;
+    case Wimp_ReportError:
+      snprintf (reported, sizeof reported, "%s", ((const _kernel_oserror *) r[0])->errmess);
+      return NULL;
+    case Wimp_CloseDown:
+      return NULL;
+    }
+  return NULL;
+}
+
+static void fake_wimp (void)
+{
+  static const struct { int swi; const char *name; } list[] = {
+    { Wimp_Initialise, "Wimp_Initialise" }, { Wimp_CreateIcon, "Wimp_CreateIcon" },
+    { Wimp_CreateWindow, "Wimp_CreateWindow" }, { Wimp_GetWindowState, "Wimp_GetWindowState" },
+    { Wimp_OpenWindow, "Wimp_OpenWindow" }, { Wimp_CloseWindow, "Wimp_CloseWindow" },
+    { Wimp_SetIconState, "Wimp_SetIconState" }, { Wimp_CreateMenu, "Wimp_CreateMenu" },
+    { Wimp_SetCaretPosition, "Wimp_SetCaretPosition" }, { Wimp_GetCaretPosition, "Wimp_GetCaretPosition" }, { Wimp_ProcessKey, "Wimp_ProcessKey" },
+    { Wimp_GetPointerInfo, "Wimp_GetPointerInfo" },
+    { Wimp_ReportError, "Wimp_ReportError" }, { Wimp_CloseDown, "Wimp_CloseDown" } };
+  size_t i;
+  fake_reset ();
+  for (i = 0; i < sizeof list / sizeof list[0]; i++)
+    fake_swi (list[i].swi, list[i].name, wimp);
+  windows = 0;
+}
+
+enum { STATUS = FIRST_WINDOW, CHOICES, INFO };
+
+static int click (int window, int icon, int buttons)
+{
+  int b[64] = { 0 };
+  b[0] = 1000; b[1] = 20; b[2] = buttons; b[3] = window; b[4] = icon;
+  return wimp_event (Mouse_Click, b);
+}
+
+static int key (int window, int k)
+{
+  int b[64] = { 0 };
+  b[0] = window; b[1] = 1; b[6] = k;
+  return wimp_event (Key_Pressed, b);
+}
+
+static int choose (int item)
+{
+  int b[64] = { 0 };
+  b[0] = item; b[1] = -1;
+  return wimp_event (Menu_Selection, b);
+}
+
+/* Types into a Choices icon, as the Wimp would (writes its buffer). */
+static void type (int icon, const char *text)
+{
+  int *ic = &window_blocks[1][22 + 8 * icon];
+  snprintf ((char *) ic[5], (size_t) ic[7], "%s", text);
+}
+
+static const char *menu_item (int i)
+{
+  return menu_ptr + 28 + 24 * i + 12;
+}
+
+static int menu_item_flags (int i)
+{
+  const int *it = (const int *) (menu_ptr + 28 + 24 * i);
+  return it[2];
+}
+
+int main (void)
+{
+  char dir[] = "/tmp/rdps-wimp-XXXXXX", settings[64], log[64], line[256];
+  server_options o;
+  wimp_setup w;
+  FILE *f;
+  int b[64] = { 0 };
+
+  if (!mkdtemp (dir))
+    return 1;
+  snprintf (settings, sizeof settings, "%s/Settings", dir);
+  snprintf (log, sizeof log, "%s/Log", dir);
+  memset (&o, 0, sizeof o);
+  w.opt = &o; w.version = "0.1-test3"; w.settings_file = settings;
+  w.logins_file = "unused"; w.log_file = log;
+
+  CHECK (wimp_read_port (settings, 3389) == 3389, "no settings file: port 3389");
+  CHECK (wimp_write_port (settings, 3390) == 0 && wimp_read_port (settings, 3389) == 3390,
+         "the port is saved and read back");
+  f = fopen (settings, "w"); fputs ("port 99999\n", f); fclose (f);
+  CHECK (wimp_read_port (settings, 3389) == 3389, "a port out of range is ignored");
+  f = fopen (settings, "w"); fputs ("port 5000\n", f); fclose (f);
+
+  fake_wimp ();
+  CHECK (wimp_init (&w) == 0, "wimp_init succeeds");
+  CHECK (started == 1 && strcmp (started_port, "5000") == 0, "the server starts on the saved port");
+  CHECK (windows == 3, "three windows: Status, Choices, Info");
+  CHECK (bar_block[0] == -1 && (bar_block[5] & 0x102) == 0x102, "an indirected sprite on the icon bar");
+  CHECK (strcmp ((const char *) bar_block[6], "!rdpserver") == 0 && bar_block[7] == 1,
+         "the !rdpserver sprite, from the Wimp's pool");
+  CHECK (((bar_block[5] >> 12) & 15) == 3, "the icon reports clicks");
+  CHECK (window_icons[1] == 10, "Choices has its ten icons");
+  CHECK (((window_blocks[1][22 + 8 * 1 + 4] >> 12) & 15) == 15
+         && ((window_blocks[1][22 + 8 * 5 + 4] >> 12) & 15) == 15, "port and password are writable");
+  CHECK (strncmp ((const char *) window_blocks[1][22 + 8 * 5 + 6], "D*", 2) == 0,
+         "the password shows as stars");
+  CHECK (strcmp (wimp_icon_text (2, 7), "0.1-test3") == 0, "Info shows the version");
+  CHECK (strstr (wimp_icon_text (0, 0), "Waiting for a client on port 5000") != NULL,
+         "Status: waiting on port 5000");
+  CHECK (hook != NULL, "the server's messages come to the front end");
+
+  /* The server's messages: the log and the Status window. */
+  hook ("listening on port 5000");
+  wimp_tick ();
+  CHECK (strcmp (wimp_icon_text (0, 9), "listening on port 5000") == 0, "the newest message is last");
+  f = fopen (log, "r");
+  CHECK (f && fgets (line, sizeof line, f) && strstr (line, "RDPServer 0.1-test3"), "the log starts with the version");
+  CHECK (f && fgets (line, sizeof line, f) && strcmp (line, "listening on port 5000\n") == 0,
+         "and has the message");
+  if (f) fclose (f);
+
+  /* wimp_tick runs the server and says when to come back. */
+  steps = 0; step_wait = 2;
+  CHECK (wimp_tick () == now + 2 && steps == 1, "the next poll is when the server asks (2 cs)");
+  step_wait = 25;
+  CHECK (wimp_tick () == now + 25, "or 25 cs when it's idle");
+
+  /* A client connects: the icon changes. */
+  fake_status.connected = 1;
+  snprintf (fake_status.client, sizeof fake_status.client, "192.168.0.58:58303");
+  snprintf (fake_status.user, sizeof fake_status.user, "andrew");
+  fake_status.width = 1920; fake_status.height = 1080; fake_status.bpp = 32;
+  redraws = 0;
+  wimp_tick ();
+  CHECK (wimp_shows_connected (), "connected: the icon bar shows it");
+  CHECK (strcmp ((const char *) bar_block[6], "rdpserver-on") == 0, "with the rdpserver-on sprite");
+  CHECK (bar_redraws == 1, "the icon is redrawn");
+  CHECK (strstr (wimp_icon_text (0, 0), "Connected: 192.168.0.58:58303 (andrew), 1920 x 1080, 32 bpp") != NULL,
+         "Status says who's connected");
+
+  /* The icon bar. */
+  CHECK (click (-2, 3, Button_Select) == 0 && opened_window == STATUS, "Select opens Status");
+  CHECK (click (-2, 3, Button_Menu) == 0 && menu_ptr && strcmp (menu_ptr, "RDPServer") == 0,
+         "Menu opens the menu");
+  CHECK (menu_x == 1000 - 64 && menu_y == 96 + 5 * 44, "above the icon");
+  CHECK (strcmp (menu_item (0), "Info") == 0 && strcmp (menu_item (4), "Quit") == 0, "Info ... Quit");
+  CHECK (((const int *) (menu_ptr + 28))[1] == INFO, "Info leads to the Info window");
+  CHECK ((menu_item_flags (3) & 0x400000) == 0, "Disconnect can be chosen while connected");
+  pointer_buttons = Button_Select;
+  CHECK (choose (3) == 0 && disconnected == 1, "Disconnect disconnects");
+  wimp_tick ();
+  CHECK (!wimp_shows_connected (), "and the icon changes back");
+  click (-2, 3, Button_Menu);
+  CHECK (menu_item_flags (3) & 0x400000, "Disconnect is greyed out with no client");
+  menu_calls = 0;
+  pointer_buttons = Button_Adjust;
+  CHECK (choose (1) == 0 && opened_window == STATUS && menu_calls == 1,
+         "Status... with Adjust opens Status and keeps the menu open");
+  pointer_buttons = Button_Select;
+
+  /* Choices: the login. */
+  CHECK (click (-2, 3, Button_Adjust) == 0 && opened_window == CHOICES, "Adjust opens Choices");
+  CHECK (caret[0] == CHOICES && caret[1] == 1 && caret[5] == 4, "with the caret at the end of the port");
+  CHECK (window_blocks[1][22 + 8 * 1 + 7] == 6, "the port field takes 5 digits");
+  CHECK (strcmp (wimp_icon_text (1, 1), "5000") == 0, "showing the port");
+  CHECK (strstr (wimp_icon_text (1, 6), "No login set"), "and that there's no login");
+  type (3, "andrew"); type (5, "");
+  reported[0] = 0;
+  CHECK (click (CHOICES, 9, Button_Select) == 0 && strstr (reported, "Give a password"),
+         "a user name with no password is refused");
+  type (3, ""); type (5, "secret");
+  reported[0] = 0;
+  click (CHOICES, 9, Button_Select);
+  CHECK (strstr (reported, "Give a user name"), "a password with no user name is refused");
+  type (3, "andrew"); type (5, "secret");
+  reported[0] = 0; closed_window = 0;
+  CHECK (click (CHOICES, 9, Button_Select) == 0 && reported[0] == 0, "Save with both");
+  CHECK (have_login && strcmp (saved_name, "andrew") == 0 && strcmp (saved_pass, "secret") == 0,
+         "sets the login");
+  CHECK (reloaded == 1, "and the server reads it again (no restart)");
+  CHECK (closed_window == CHOICES, "the window closes");
+  CHECK (wimp_icon_text (1, 5)[0] == 0, "and the password is forgotten");
+  /* Adjust on Save: saved, the window stays, the stars go. */
+  click (-2, 3, Button_Adjust);
+  type (5, "secret2");
+  caret[0] = CHOICES; caret[1] = 5; caret[5] = 7;
+  redraws = 0; closed_window = 0;
+  CHECK (click (CHOICES, 9, Button_Adjust) == 0 && closed_window == 0 && strcmp (saved_pass, "secret2") == 0,
+         "Adjust on Save saves and keeps the window open");
+  CHECK (wimp_icon_text (1, 5)[0] == 0 && last_redraw[0] == CHOICES && redraws > 0,
+         "the password field is emptied and redrawn");
+  CHECK (caret[1] == 5 && caret[5] == 0, "with the caret back at its start");
+  CHECK (started == 1, "the port didn't change: the server wasn't restarted");
+
+  click (-2, 3, Button_Adjust);
+  CHECK (strcmp (wimp_icon_text (1, 3), "andrew") == 0, "Choices shows the user name");
+  CHECK (strstr (wimp_icon_text (1, 6), "Clients log in as andrew"), "and that there's a login");
+  type (5, "");
+  closed_window = 0;
+  CHECK (key (CHOICES, 13) == 0 && closed_window == CHOICES && reported[0] == 0,
+         "Return saves: the same user with no new password keeps the login");
+  CHECK (reloaded == 2, "(nothing new to reload)");
+
+  click (-2, 3, Button_Adjust);
+  CHECK (click (CHOICES, 7, Button_Select) == 0 && reloaded == 3, "Clear login");
+  have_login = 0;   /* the stand-in for remove() */
+  click (-2, 3, Button_Adjust);
+  CHECK (strstr (wimp_icon_text (1, 6), "No login set"), "and it's gone");
+
+  /* Choices: the port. */
+  type (1, "12x");
+  reported[0] = 0;
+  click (CHOICES, 9, Button_Select);
+  CHECK (strstr (reported, "from 1 to 65535"), "a port with letters in is refused");
+  type (1, "0");
+  reported[0] = 0;
+  click (CHOICES, 9, Button_Select);
+  CHECK (strstr (reported, "from 1 to 65535"), "port 0 is refused");
+  type (1, "3391");
+  finished = 0;
+  CHECK (click (CHOICES, 9, Button_Select) == 0 && finished == 1 && started == 2
+         && strcmp (started_port, "3391") == 0, "a new port restarts the server on it");
+  CHECK (wimp_read_port (settings, 0) == 3391, "and is saved");
+  wimp_tick ();
+  CHECK (strstr (wimp_icon_text (0, 0), "port 3391") != NULL, "Status shows the new port");
+
+  start_fails = 1;
+  click (-2, 3, Button_Adjust);
+  type (1, "80");
+  reported[0] = 0;
+  click (CHOICES, 9, Button_Select);
+  CHECK (strstr (reported, "can't listen on port 80"), "a port that can't be used is reported");
+  wimp_tick ();
+  CHECK (strstr (wimp_icon_text (0, 0), "Not listening"), "and Status says so");
+  start_fails = 0;
+  click (-2, 3, Button_Adjust);
+  started = 0;
+  CHECK (click (CHOICES, 9, Button_Select) == 0 && started == 1 && strcmp (started_port, "80") == 0,
+         "Save with the same port tries it again once it's free");
+
+  /* Keys and the rest. */
+  click (-2, 3, Button_Adjust);
+  closed_window = 0;
+  CHECK (key (CHOICES, 0x1b) == 0 && closed_window == CHOICES, "Escape closes Choices");
+  CHECK (key (STATUS, 0x181) == 0 && processed_key == 0x181, "other keys go back to the Wimp");
+  b[0] = STATUS;
+  CHECK (wimp_event (Close_Window_Request, b) == 0 && closed_window == STATUS, "Status closes");
+  memset (b, 0, sizeof b); b[4] = 0;
+  CHECK (wimp_event (User_Message, b) == 1, "Message_Quit ends the program");
+  CHECK (choose (4) == 1, "and so does Quit");
+  finished = 0;
+  wimp_close ();
+  CHECK (fake_calls (Wimp_CloseDown) == 1, "Wimp_CloseDown at the end");
+
+  remove (settings);
+  remove (log);
+  rmdir (dir);
+  return fake_done ("RDPServer desktop front end (fake RISC OS)");
+}

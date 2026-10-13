@@ -53,25 +53,60 @@ typedef struct
   unsigned refuse_until;           /* after a wrong password: cs */
   unsigned handshake_deadline;      /* cs; 0 once the client is up */
   unsigned tiles_sent;
+  unsigned next_scan;              /* when the next band of rows is due */
+  unsigned last_activity;          /* last change seen or input received */
+  char client_desc[64];            /* "192.168.0.58:58303" */
+  char client_user[64];
+  int running;
 } server;
 
 /* A client gets this long to finish connecting: libxrdp reads the
    connection sequence with blocking reads, and nothing else runs
    meanwhile. */
 #define HANDSHAKE_CS 3000
+/* After this long without a change on the screen or input from the
+   client, scan at the idle rate. */
+#define ACTIVE_CS 200
 
 static server srv;
+
+/* Messages: to stdout (the task window, Linux), or to the front end's
+   hook (the Wimp version keeps the last few for its Status window and
+   writes them to a log file). */
+static void (*say_hook) (const char *line);
+
+void
+server_set_message_hook (void (*hook) (const char *line))
+{
+  say_hook = hook;
+}
 
 static void
 say (const char *fmt, ...)
 {
+  char line[256];
   va_list ap;
   va_start (ap, fmt);
-  fputs ("RDPServer: ", stdout);
-  vfprintf (stdout, fmt, ap);
+  vsnprintf (line, sizeof line, fmt, ap);
   va_end (ap);
-  fputc ('\n', stdout);
-  fflush (stdout);
+  if (say_hook)
+    say_hook (line);
+  else
+    {
+      printf ("RDPServer: %s\n", line);
+      fflush (stdout);
+    }
+}
+
+/* Copies text, cut short to fit (user names can be long). */
+static void
+copy_text (char *to, size_t size, const char *from)
+{
+  size_t n = strlen (from);
+  if (n >= size)
+    n = size - 1;
+  memcpy (to, from, n);
+  to[n] = 0;
 }
 
 /* --- input ---------------------------------------------------------------- */
@@ -83,12 +118,51 @@ sink_move (void *ctx, int x, int y)
   plat_mouse_to (&s->scr, x, y);
 }
 
+static int loggable (int ll);
+
+/* Before a mouse button goes down: if RISC OS thinks Shift, Ctrl or Alt
+   is held but the client hasn't pressed one, let go of it, or the click
+   is taken as a Shift-click (test2 on a Pi 4: every Select acted as
+   Shift-Select with no Shift from the client). A key-up for a key that's
+   already up does nothing, so this can't upset anything. */
+static void
+unstick_modifiers (server *s)
+{
+  static const struct { int bit, left, right; const char *name; } mod[] = {
+    { PLAT_SHIFT, 0x4C, 0x58, "Shift" },
+    { PLAT_CTRL, 0x3B, 0x61, "Ctrl" },
+    { PLAT_ALT, 0x5E, 0x60, "Alt" } };
+  int m = plat_modifiers ();
+  size_t i;
+
+  if (s->opt->verbose)
+    say ("before the click: RISC OS has%s%s%s held, keyboard status &%02X",
+         (m & PLAT_SHIFT) ? " Shift" : "", (m & PLAT_CTRL) ? " Ctrl" : "",
+         (m & PLAT_ALT) ? " Alt" : (m & 7) ? "" : " nothing", (unsigned) (m >> 8) & 0xff);
+  for (i = 0; i < sizeof mod / sizeof mod[0]; i++)
+    if ((m & mod[i].bit) && !s->input.applied[mod[i].left]
+        && !s->input.applied[mod[i].right])
+      {
+        say ("%s was held on RISC OS though the client hadn't pressed it: "
+             "letting go of it", mod[i].name);
+        plat_key (mod[i].left, 0);
+        plat_key (mod[i].right, 0);
+      }
+}
+
 static void
 sink_key (void *ctx, int ll, int down)
 {
   server *s = ctx;
+  if (down && ll >= 0x70 && ll <= 0x72)
+    unstick_modifiers (s);
   if (s->opt->verbose)
-    say ("KeyV %s &%02X", down ? "down" : "up", ll);
+    {
+      if (loggable (ll))
+        say ("KeyV %s &%02X", down ? "down" : "up", ll);
+      else
+        say ("KeyV %s (a key)", down ? "down" : "up");
+    }
   plat_key (ll, down);
 }
 
@@ -163,13 +237,31 @@ mouse (server *s, int flags, int x, int y)
     inq_key (&s->input, 0x72, down);
 }
 
+/* Shift, Ctrl, Alt, Caps Lock, Num Lock and the mouse buttons: the keys
+   -v names in the log. Other keys are logged without saying which, so a
+   password typed over RDP never ends up in the log. */
+static int
+loggable (int ll)
+{
+  switch (ll)
+    {
+    case 0x4C: case 0x58: case 0x3B: case 0x61: case 0x5E: case 0x60:
+    case 0x5D: case 0x22: case 0x70: case 0x71: case 0x72:
+      return 1;
+    }
+  return 0;
+}
+
 static void
 scancode (server *s, int flags, int code)
 {
   int ll = keymap_lookup (code, (flags & KBD_FLAG_EXT) != 0);
-  if (s->opt->verbose)
-    say ("key scancode &%02X flags &%04X -> %s&%02X", (unsigned) code,
-         (unsigned) flags, ll < 0 ? "(none) " : "", ll < 0 ? 0 : (unsigned) ll);
+  if (s->opt->verbose && loggable (ll))
+    say ("key scancode &%02X flags &%04X -> &%02X", (unsigned) code,
+         (unsigned) flags, (unsigned) ll);
+  else if (s->opt->verbose && ll < 0)
+    say ("key scancode &%02X flags &%04X: no RISC OS key", (unsigned) code,
+         (unsigned) flags);
   if (ll >= 0)
     inq_key (&s->input, ll, (flags & KBD_FLAG_UP) == 0);
 }
@@ -182,6 +274,7 @@ callback (intptr_t id, int msg, intptr_t param1, intptr_t param2,
   server *s = (server *) id;
   if (s == NULL || s->session == NULL)
     return 0;
+  s->last_activity = plat_time_cs ();
   switch (msg)
     {
     case RDP_INPUT_SCANCODE:
@@ -231,6 +324,7 @@ session_end (server *s, const char *why)
   s->was_up = 0;
   s->handshake_deadline = 0;
   plat_set_clients (0);
+  s->client_desc[0] = s->client_user[0] = 0;
   say ("client gone (%s)", why);
 }
 
@@ -262,6 +356,8 @@ session_up (server *s)
     }
   cap_scan (&s->cap, s->scr.base, s->scr.stride, s->scr.height);
   cap_mark_all (&s->cap);
+  copy_text (s->client_user, sizeof s->client_user, ci->username);
+  s->last_activity = plat_time_cs ();
   say ("client up: %d x %d, %d bpp, user \"%s\"", s->scr.width, s->scr.height,
        s->client_bpp, ci->username);
   plat_set_clients (1);
@@ -378,7 +474,8 @@ session_start (server *s, struct trans *t)
   g_rdps_desktop_height = s->scr.height;
 
   s->trans = t;
-  s->handshake_deadline = plat_time_cs () + HANDSHAKE_CS;
+  s->handshake_deadline = plat_time_cs ()
+                          + (s->opt->handshake_cs ? s->opt->handshake_cs : HANDSHAKE_CS);
   t->extra_flags = 0;
   t->header_size = 0;
   t->no_stream_init_on_data_in = 1;
@@ -396,10 +493,9 @@ session_start (server *s, struct trans *t)
   t->my_source = XRDP_SOURCE_CLIENT;
   s->session->callback = callback;
   s->session->is_term = is_term;
-  {
-    char desc[64];
-    say ("connection from %s", g_sck_get_peer_description ((int) t->sck, desc, sizeof desc));
-  }
+  g_sck_get_peer_description ((int) t->sck, s->client_desc, sizeof s->client_desc);
+  s->client_user[0] = 0;
+  say ("connection from %s", s->client_desc);
   /* The connection sequence, up to the client's capabilities. */
   if (libxrdp_process_incoming (s->session) != 0)
     {
@@ -434,10 +530,9 @@ conn_in (struct trans *listener, struct trans *t)
 /* --- the loop ------------------------------------------------------------- */
 
 int
-server_run (const server_options *o)
+server_start (const server_options *o)
 {
   server *s = &srv;
-  unsigned start = plat_time_cs (), next_scan = start;
 
   memset (s, 0, sizeof *s);
   s->opt = o;
@@ -454,25 +549,42 @@ server_run (const server_options *o)
   if (s->logins.count == 0)
     say ("no login set: anyone who can reach this computer can connect");
   plat_set_clients (0);
-  atexit (at_exit);
-  signal (SIGSEGV, fatal_signal);
-  signal (SIGBUS, fatal_signal);
-  signal (SIGILL, fatal_signal);
-  signal (SIGFPE, fatal_signal);
-  signal (SIGABRT, fatal_signal);
   {
-    /* libxrdp's messages to the task window: errors only, or more with -v */
+    static int once;
+    if (!once)
+      {
+        once = 1;
+        atexit (at_exit);
+        signal (SIGSEGV, fatal_signal);
+        signal (SIGBUS, fatal_signal);
+        signal (SIGILL, fatal_signal);
+        signal (SIGFPE, fatal_signal);
+        signal (SIGABRT, fatal_signal);
+      }
+  }
+  {
+    /* libxrdp's messages: errors only, or more with -v; to the console,
+       or to a file (the Wimp version: a Wimp task mustn't print). */
     struct log_config *lc = log_config_init_for_console (o->verbose ? LOG_LEVEL_INFO
                                                          : LOG_LEVEL_ERROR, NULL);
     if (lc)
       {
+        if (o->log_file)
+          {
+            lc->enable_console = 0;
+            lc->log_file = strdup (o->log_file);
+            lc->log_level = o->verbose ? LOG_LEVEL_INFO : LOG_LEVEL_ERROR;
+          }
         log_start_from_param (lc);
         log_config_free (lc);
       }
   }
   s->listener = trans_create (TRANS_MODE_TCP, 8192, 8192);
   if (!s->listener)
-    return 1;
+    {
+      log_end ();
+      return 1;
+    }
   s->listener->trans_conn_in = conn_in;
   s->listener->callback_data = s;
   s->listener->is_term = is_term;
@@ -480,121 +592,219 @@ server_run (const server_options *o)
     {
       say ("can't listen on port %s: %s", o->port, g_get_strerror ());
       trans_delete (s->listener);
+      s->listener = NULL;
+      log_end ();
       return 1;
     }
+  s->running = 1;
   say ("listening on port %s", o->port);
+  return 0;
+}
 
-  while (!server_stop)
+/* The time between scans of the whole screen: quicker while things are
+   happening, slower when the screen has been still for a while. */
+static unsigned
+scan_period (server *s, unsigned now)
+{
+  unsigned active = s->opt->interval_cs ? s->opt->interval_cs : 10;
+  unsigned idle = s->opt->idle_interval_cs ? s->opt->idle_interval_cs : 25;
+  return (int) (now - s->last_activity) < ACTIVE_CS ? active : idle;
+}
+
+int
+server_step (unsigned max_wait_cs)
+{
+  server *s = &srv;
+  fd_set rd, wr;
+  struct timeval tv;
+  int backlog, maxfd;
+  unsigned now = plat_time_cs (), wait_cs;
+
+  if (!s->running)
+    return 25;
+  maxfd = (int) s->listener->sck;
+  FD_ZERO (&rd);
+  FD_ZERO (&wr);
+  FD_SET ((int) s->listener->sck, &rd);
+  /* Output libxrdp couldn't send yet waits in trans->wait_s. */
+  backlog = s->trans && s->trans->wait_s != NULL;
+  if (s->trans)
     {
-      fd_set rd, wr;
-      struct timeval tv;
-      int backlog;
-      int maxfd = (int) s->listener->sck;
-      unsigned now = plat_time_cs (), wait_cs;
+      FD_SET ((int) s->trans->sck, &rd);
+      if (backlog)
+        FD_SET ((int) s->trans->sck, &wr);
+      if ((int) s->trans->sck > maxfd)
+        maxfd = (int) s->trans->sck;
+    }
+  if (s->was_up && !backlog)
+    wait_cs = (int) (s->next_scan - now) > 0 ? s->next_scan - now : 0;
+  else
+    wait_cs = 20;
+  if (s->input.count > 0 && wait_cs > 1)
+    wait_cs = 1;   /* input waiting for its turn */
+  if (wait_cs > max_wait_cs)
+    wait_cs = max_wait_cs;
+  tv.tv_sec = (long) (wait_cs / 100);
+  tv.tv_usec = (long) (wait_cs % 100) * 10000;
+  select (maxfd + 1, &rd, &wr, NULL, &tv);
 
-      if (o->max_seconds && now - start >= (unsigned) o->max_seconds * 100)
-        break;
-      FD_ZERO (&rd);
-      FD_ZERO (&wr);
-      FD_SET ((int) s->listener->sck, &rd);
-      /* Output libxrdp couldn't send yet waits in trans->wait_s. */
-      backlog = s->trans && s->trans->wait_s != NULL;
-      if (s->trans)
-        {
-          FD_SET ((int) s->trans->sck, &rd);
-          if (backlog)
-            FD_SET ((int) s->trans->sck, &wr);
-          if ((int) s->trans->sck > maxfd)
-            maxfd = (int) s->trans->sck;
-        }
-      if (s->was_up && !backlog)
-        wait_cs = (int) (next_scan - now) > 0 ? next_scan - now : 0;
-      else
-        wait_cs = 20;
-      if (s->input.count > 0 && wait_cs > 1)
-        wait_cs = 1;   /* input waiting for its turn */
-      tv.tv_sec = (long) (wait_cs / 100);
-      tv.tv_usec = (long) (wait_cs % 100) * 10000;
-      select (maxfd + 1, &rd, &wr, NULL, &tv);
-
-      if (FD_ISSET ((int) s->listener->sck, &rd)
-          && trans_check_wait_objs (s->listener) != 0)
-        {
-          /* An accept() error (a client that reset before we took it)
-             marks the listener down for good: keep it listening. */
-          s->listener->status = TRANS_STATUS_UP;
-        }
-
-      /* Reads what has come in, and sends what's waiting
-         (trans_check_wait_objs ends with trans_send_waiting). */
-      if (s->trans && (FD_ISSET ((int) s->trans->sck, &rd)
-                       || (backlog && FD_ISSET ((int) s->trans->sck, &wr))))
-        if (trans_check_wait_objs (s->trans) != 0)
-          {
-            session_end (s, "disconnected");
-            continue;
-          }
-      inq_run (&s->input, plat_time_cs (), &s->sink);
-
-      if (s->trans && !s->was_up && s->handshake_deadline && is_term ())
-        {
-          session_end (s, "too slow connecting");
-          continue;
-        }
-
-      if (s->session && s->session->up_and_running && !s->was_up)
-        {
-          int r = session_up (s);
-          if (r != 0)
-            {
-              if (r > 0)
-                /* Slow down password guessing: no new clients for 3 s. */
-                s->refuse_until = plat_time_cs () + 300;
-              session_end (s, r > 0 ? "wrong user name or password" : "out of memory");
-              continue;
-            }
-          s->was_up = 1;
-          s->handshake_deadline = 0;
-          send_dirty (s);
-          next_scan = plat_time_cs () + o->interval_cs;
-        }
-      else if (s->session && !s->session->up_and_running && s->was_up)
-        {
-          /* deactivated (a reset): wait to be up again */
-          s->was_up = 0;
-          cap_free (&s->cap);
-          free (s->tilebuf);
-          s->tilebuf = NULL;
-        }
-
-      now = plat_time_cs ();
-      /* While the client hasn't taken what we sent, don't send more: the
-         changes wait as dirty tiles, so a slow link gets fewer, later
-         frames rather than an ever-growing queue. */
-      if (s->was_up && s->trans->wait_s == NULL && (int) (now - next_scan) >= 0)
-        {
-          rdps_screen cur;
-          /* A mode change moves or resizes the screen: stop reading the
-             old one. The client can connect again to get the new size. */
-          if (plat_screen (&cur) != NULL || cur.base != s->scr.base
-              || cur.width != s->scr.width || cur.height != s->scr.height
-              || cur.log2bpp != s->scr.log2bpp || cur.stride != s->scr.stride
-              || pix_format_of (cur.log2bpp, cur.ncolour, cur.modeflags) != s->fmt)
-            {
-              session_end (s, "the screen mode changed");
-              continue;
-            }
-          int rows = o->rows_per_scan > 0 ? o->rows_per_scan : s->scr.height;
-          cap_scan (&s->cap, s->scr.base, s->scr.stride, rows);
-          send_dirty (s);
-          next_scan = now + o->interval_cs;
-        }
+  if (FD_ISSET ((int) s->listener->sck, &rd)
+      && trans_check_wait_objs (s->listener) != 0)
+    {
+      /* An accept() error (a client that reset before we took it)
+         marks the listener down for good: keep it listening. */
+      s->listener->status = TRANS_STATUS_UP;
     }
 
+  /* Reads what has come in, and sends what's waiting
+     (trans_check_wait_objs ends with trans_send_waiting). */
+  if (s->trans && (FD_ISSET ((int) s->trans->sck, &rd)
+                   || (backlog && FD_ISSET ((int) s->trans->sck, &wr))))
+    if (trans_check_wait_objs (s->trans) != 0)
+      {
+        session_end (s, "disconnected");
+        return 0;
+      }
+  inq_run (&s->input, plat_time_cs (), &s->sink);
+
+  if (s->trans && !s->was_up && s->handshake_deadline && is_term ())
+    {
+      session_end (s, "too slow connecting");
+      return 0;
+    }
+
+  if (s->session && s->session->up_and_running && !s->was_up)
+    {
+      int r = session_up (s);
+      if (r != 0)
+        {
+          if (r > 0)
+            /* Slow down password guessing: no new clients for 3 s. */
+            s->refuse_until = plat_time_cs () + 300;
+          session_end (s, r > 0 ? "wrong user name or password" : "out of memory");
+          return 0;
+        }
+      s->was_up = 1;
+      s->handshake_deadline = 0;
+      send_dirty (s);
+      s->next_scan = plat_time_cs () + scan_period (s, plat_time_cs ());
+    }
+  else if (s->session && !s->session->up_and_running && s->was_up)
+    {
+      /* deactivated (a reset): wait to be up again */
+      s->was_up = 0;
+      cap_free (&s->cap);
+      free (s->tilebuf);
+      s->tilebuf = NULL;
+    }
+
+  now = plat_time_cs ();
+  /* While the client hasn't taken what we sent, don't send more: the
+     changes wait as dirty tiles, so a slow link gets fewer, later frames
+     rather than an ever-growing queue. */
+  if (s->was_up && s->trans->wait_s == NULL && (int) (now - s->next_scan) >= 0)
+    {
+      rdps_screen cur;
+      unsigned period = scan_period (s, now);
+      int band, h = s->scr.height;
+      /* A mode change moves or resizes the screen: stop reading the old
+         one. The client can connect again to get the new size. */
+      if (plat_screen (&cur) != NULL || cur.base != s->scr.base
+          || cur.width != s->scr.width || cur.height != s->scr.height
+          || cur.log2bpp != s->scr.log2bpp || cur.stride != s->scr.stride
+          || pix_format_of (cur.log2bpp, cur.ncolour, cur.modeflags) != s->fmt)
+        {
+          session_end (s, "the screen mode changed");
+          return 0;
+        }
+      /* The screen is read in bands, so no one scan holds the machine up
+         for long: a band every period * band / height. */
+      band = s->opt->rows_per_scan > 0 ? s->opt->rows_per_scan : h;
+      if (band > h)
+        band = h;
+      if (cap_scan (&s->cap, s->scr.base, s->scr.stride, band) > 0)
+        s->last_activity = now;
+      send_dirty (s);
+      {
+        unsigned gap = (unsigned) ((unsigned long) period * band / h);
+        s->next_scan = now + (gap ? gap : 1);
+      }
+    }
+
+  if (s->input.count > 0)
+    return 1;
+  if (s->trans && s->trans->wait_s != NULL)
+    return 2;   /* the client is behind: no scan until it catches up */
+  if (s->was_up)
+    {
+      int d = (int) (s->next_scan - plat_time_cs ());
+      return d > 0 ? (d < 2 ? d : 2) : 0;   /* the socket every 2 cs at most */
+    }
+  return s->trans ? 2 : 25;
+}
+
+void
+server_disconnect (void)
+{
+  if (srv.trans || srv.session)
+    session_end (&srv, "disconnected from this computer");
+}
+
+int
+server_reload_logins (void)
+{
+  server *s = &srv;
+  auth_db db;
+  if (!s->opt || auth_load (s->opt->logins, &db) != 0)
+    return -1;
+  s->logins = db;
+  return 0;
+}
+
+void
+server_finish (void)
+{
+  server *s = &srv;
+  if (!s->running)
+    return;
   if (s->session || s->trans)
     session_end (s, "server stopping");
   trans_delete (s->listener);
+  s->listener = NULL;
+  s->running = 0;
   say ("stopped (%u tiles sent)", s->tiles_sent);
   log_end ();
+}
+
+void
+server_get_status (server_status *st)
+{
+  server *s = &srv;
+  memset (st, 0, sizeof *st);
+  st->listening = s->running;
+  st->connected = s->was_up;
+  st->connecting = s->trans != NULL && !s->was_up;
+  copy_text (st->client, sizeof st->client, s->client_desc);
+  copy_text (st->user, sizeof st->user, s->client_user);
+  st->width = s->scr.width;
+  st->height = s->scr.height;
+  st->bpp = s->client_bpp;
+  st->tiles_sent = s->tiles_sent;
+  st->login_set = s->logins.count > 0;
+}
+
+int
+server_run (const server_options *o)
+{
+  unsigned start = plat_time_cs ();
+  if (server_start (o) != 0)
+    return 1;
+  while (!server_stop)
+    {
+      if (o->max_seconds && plat_time_cs () - start >= (unsigned) o->max_seconds * 100)
+        break;
+      server_step (20);
+    }
+  server_finish ();
   return 0;
 }
