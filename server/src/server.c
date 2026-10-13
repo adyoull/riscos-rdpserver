@@ -58,6 +58,7 @@ typedef struct
   unsigned last_activity;          /* last change seen or input received */
   unsigned steps, reads, most_reads; /* for -v's figures every 5 s */
   unsigned step_cs_max, scans, stats_at;
+  unsigned last_step_end, gap_max;  /* time between steps: other programs */
   char client_desc[64];            /* "192.168.0.58:58303" */
   char client_user[64];
   int running;
@@ -73,8 +74,12 @@ typedef struct
 /* A mouse button held down (a drag) is let go of by a ticker event if the
    server hasn't run for this long: a program that loops while the button
    is down without letting the desktop run (!Folio's title bar) would
-   otherwise wait for a button-up the server can't send. */
-#define WATCHDOG_CS 50
+   otherwise wait for a button-up the server can't send. test7's 50 cs
+   cut short drags in programs that are merely slow (Folio's document
+   window); 150 cs. */
+#define WATCHDOG_CS 150
+/* -v logs any wait this long between steps while a client is connected. */
+#define GAP_LOG_CS 25
 
 static server srv;
 
@@ -826,9 +831,24 @@ server_step (unsigned max_wait_cs)
 {
   server *s = &srv;
   unsigned t0 = plat_time_cs (), t;
-  int r = step (max_wait_cs);
+  int r, held;
+
+  /* How long other programs had the machine since the last step. With -v,
+     a long wait while a client is connected is logged at once, saying
+     whether a mouse button was held (a drag) at the time. */
+  if (s->last_step_end && s->trans)
+    {
+      unsigned gap = t0 - s->last_step_end;
+      if (gap > s->gap_max)
+        s->gap_max = gap;
+      held = s->input.applied[0x70] || s->input.applied[0x71] || s->input.applied[0x72];
+      if (gap >= GAP_LOG_CS && s->opt && s->opt->verbose)
+        say ("no turn for %u cs%s", gap, held ? " (a mouse button held)" : "");
+    }
+  r = step (max_wait_cs);
 
   t = plat_time_cs ();
+  s->last_step_end = t;
   s->steps++;
   if (t - t0 > s->step_cs_max)
     s->step_cs_max = t - t0;
@@ -838,9 +858,11 @@ server_step (unsigned max_wait_cs)
     {
       if (s->opt && s->opt->verbose && s->trans)
         say ("last 5 s: %u steps, %u reads (most %u in one step), %u scans, "
-             "longest step %u cs, %u tiles sent in all", s->steps, s->reads,
-             s->most_reads, s->scans, s->step_cs_max, s->tiles_sent);
+             "longest step %u cs, longest wait %u cs, %u tiles sent in all",
+             s->steps, s->reads, s->most_reads, s->scans, s->step_cs_max,
+             s->gap_max, s->tiles_sent);
       s->steps = s->reads = s->most_reads = s->scans = s->step_cs_max = 0;
+      s->gap_max = 0;
       s->stats_at = t + 500;
     }
   return r;

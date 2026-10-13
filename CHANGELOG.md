@@ -1,5 +1,16 @@
 # Changelog
 
+## RDPServer 0.1-test8 (13 October 2026)
+
+- test7's log: dragging Folio's document window, the watchdog let go
+  eight times (the server had no turn for half a second while the button
+  was held); Bookshelf and other windows never. The watchdog now waits
+  1.5 s, so a program that's only slow keeps its drag.
+- `-v` logs each wait of 25 cs or more between the server's turns while a
+  client is connected ("no turn for N cs", noting a held button), and the
+  5-second line gives the longest wait. That shows how long a program
+  held the desktop.
+
 ## RDPServer 0.1-test7 (13 October 2026)
 
 - Dragging !Folio's windows by the title bar still froze the desktop
