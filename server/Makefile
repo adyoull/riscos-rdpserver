@@ -12,7 +12,7 @@ include $(RCD_DIR)/riscos.mk
 .DEFAULT_GOAL := all
 
 VERSION := 0.1
-TESTSUFFIX := -test4
+TESTSUFFIX := -test5
 B := build
 X := $(B)/xrdp
 M := $(B)/upstream/mbedtls
@@ -31,7 +31,8 @@ XRDP_FLAGS := -w
 
 # --- RISC OS ---------------------------------------------------------------
 RO := $(B)/riscos
-RO_OBJ := $(patsubst %.c,$(RO)/%.o,$(notdir $(XRDP_SRC) $(OUR_SRC))) $(RO)/plat_riscos.o $(RO)/wimp.o
+RO_OBJ := $(patsubst %.c,$(RO)/%.o,$(notdir $(XRDP_SRC) $(OUR_SRC))) $(RO)/plat_riscos.o $(RO)/wimp.o \
+          $(RO)/clickup.o
 RO_MBED := $(patsubst %.c,$(RO)/mbed/%.o,$(notdir $(MBED_SRC)))
 RO_CFLAGS := $(RISCOS_CFLAGS) -ffile-prefix-map=$(CURDIR)=rdpserver $(INC)
 
@@ -43,6 +44,8 @@ $(RO)/%.o: $(X)/common/%.c | $(RO)
 	$(RO_CC) $(RO_CFLAGS) $(XRDP_FLAGS) -c $< -o $@
 $(RO)/%.o: src/%.c src/*.h | $(RO)
 	$(RO_CC) $(RO_CFLAGS) -Wall -Wextra -c $< -o $@
+$(RO)/clickup.o: src/clickup.s | $(RO)
+	$(RO_CC) $(RO_CFLAGS) -c $< -o $@
 $(RO)/mbed/%.o: $(M)/library/%.c config/rdps_mbedtls_config.h | $(RO)
 	$(RO_CC) $(RO_CFLAGS) -w -c $< -o $@
 $(RO)/libmbedcrypto.a: $(RO_MBED)
@@ -124,7 +127,7 @@ T := $(B)/tests
 UNIT_SRC := tests/test_units.c src/input.c src/auth.c src/pixels.c src/capture.c src/keymap.c src/keygen.c \
             src/ssl_calls.c src/os_calls.c
 
-check: checks test-units test-units-qemu test-fake test-fake-wimp
+check: checks test-units test-units-qemu test-fake test-fake-wimp test-emu
 
 $(T):
 	mkdir -p $(T)
@@ -146,7 +149,11 @@ test-fake-wimp: $(T)/fake-wimp
 $(T)/fake-wimp: tests/test_fake_wimp.c src/wimp.c src/wimp.h src/server.h $(FAKE_SRC) | $(T)
 	$(FAKE_CC) $(FAKE_CFLAGS) -Isrc -o $@ tests/test_fake_wimp.c src/wimp.c $(FAKE_SRC)
 
+# The click-release routines in the Unicorn emulator (pip install unicorn).
+test-emu: $(RO)/clickup.o
+	python3 tests/test_clickup.py $(RO)/clickup.o
+
 clean:
 	rm -rf $(RO) $(HO) $(QO) $(B)/app $(B)/*.zip $(B)/tests
 
-.PHONY: all host qemu check checks test-units test-units-qemu test-fake test-fake-wimp clean
+.PHONY: all host qemu check checks test-units test-units-qemu test-fake test-fake-wimp test-emu clean

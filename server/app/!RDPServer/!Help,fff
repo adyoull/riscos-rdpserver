@@ -1,4 +1,4 @@
-RDPServer 0.1-test4 (test build)
+RDPServer 0.1-test5 (test build)
 ================================
 
 Lets you use this RISC OS desktop from another computer with Remote
@@ -59,8 +59,9 @@ Test builds write a log, Choices:RDPServer.Log (and libxrdp's own,
 XrdpLog): every mouse button and wheel event, and Shift, Ctrl and Alt.
 Other keys are logged without saying which, so nothing you type is kept.
 A click goes to RISC OS when the client lets go of the button (or after
-a quarter of a second, if you hold it, or as soon as you drag), so
-double-clicks reach the Filer as double-clicks.
+a quarter of a second, if you hold it, or as soon as you drag); the
+button is then released 6 cs later by a ticker event, so double-clicks
+reach the Filer as double-clicks.
 
 What isn't done yet
 -------------------

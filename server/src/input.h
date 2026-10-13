@@ -16,10 +16,12 @@
    "double-click and hold", which it treats as a Shift-double-click
    (Filer s/Clicks): an application opens as a folder, a file loads into
    !Edit. That is what test1 to test3 did. So a button-down waits until
-   its button-up has arrived, then both go in the same call, the gap
-   between them spent waiting here rather than in other programs. A
-   button held longer than INQ_HOLD_CS, or moved with (a drag), goes down
-   on its own.
+   its button-up has arrived, then the two go as one click: s->click
+   presses the button and has a ticker event let go of it INQ_CLICK_CS
+   later, whoever has the machine then. The Wimp must see the button down
+   at a poll, so the down and up can't simply go together (test4 did that:
+   no clicks at all). A button held longer than INQ_HOLD_CS, or moved
+   with (a drag), goes down on its own.
 
    Copyright (c) 2026 Andrew Youll. MIT licence (see LICENSE). */
 #ifndef RDPS_INPUT_H
@@ -33,6 +35,8 @@
 #define INQ_BETWEEN_CS 2
 /* Centiseconds a button-down waits for its up before going down alone. */
 #define INQ_HOLD_CS 25
+/* Centiseconds from a click's down to its up (done by a ticker event). */
+#define INQ_CLICK_CS 6
 /* Pixels a button can move while down and still be a click, not a drag. */
 #define INQ_DRAG_PX 4
 
@@ -42,6 +46,9 @@ typedef struct
   void (*key) (void *ctx, int ll, int down);    /* low-level key number */
   void (*wheel) (void *ctx, int dz, int dw);    /* notches: dz < 0 is up */
   unsigned (*now) (void *ctx);                  /* the clock, centiseconds */
+  /* A whole click: button down now, up INQ_CLICK_CS later by itself.
+     0 = done; -1 = can't (then down and up go separately). May be NULL. */
+  int (*click) (void *ctx, int ll);
   void *ctx;
 } inq_sink;
 
@@ -64,6 +71,8 @@ typedef struct
   int px, py;                       /* the last move passed on */
   int holding;                      /* a button is down and its up queued:
                                        don't return until it's up */
+  int clicked;                      /* a click went: the caller should let
+                                       the Wimp see it before anything else */
 } inq;
 
 void inq_init (inq *q);

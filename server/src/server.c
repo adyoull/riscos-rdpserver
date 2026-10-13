@@ -169,6 +169,18 @@ sink_key (void *ctx, int ll, int down)
   plat_key (ll, down);
 }
 
+static int
+sink_click (void *ctx, int ll)
+{
+  server *s = ctx;
+  unstick_modifiers (s);
+  if (plat_click (ll, INQ_CLICK_CS) != 0)
+    return -1;
+  if (s->opt->verbose)
+    say ("click &%02X: KeyV down, up in %d cs by ticker", ll, INQ_CLICK_CS);
+  return 0;
+}
+
 static unsigned
 sink_now (void *ctx)
 {
@@ -196,6 +208,7 @@ release_all (server *s)
 static void
 at_exit (void)
 {
+  plat_click_finish ();
   release_all (&srv);
   plat_set_clients (0);
 }
@@ -203,6 +216,7 @@ at_exit (void)
 static void
 fatal_signal (int sig)
 {
+  plat_click_finish ();
   release_all (&srv);
   signal (sig, SIG_DFL);
   raise (sig);
@@ -551,6 +565,7 @@ server_start (const server_options *o)
   s->sink.key = sink_key;
   s->sink.wheel = sink_wheel;
   s->sink.now = sink_now;
+  s->sink.click = sink_click;
   s->sink.ctx = s;
   if (auth_load (o->logins, &s->logins) != 0)
     {
@@ -696,6 +711,13 @@ step (unsigned max_wait_cs)
         s->most_reads = (unsigned) n;
     }
   inq_run (&s->input, plat_time_cs (), &s->sink);
+  if (s->input.clicked)
+    {
+      /* Let the Wimp see the button down now, before its up (by ticker,
+         INQ_CLICK_CS from now): no scanning or sending this time. */
+      s->input.clicked = 0;
+      return 0;
+    }
 
   if (s->trans && !s->was_up && s->handshake_deadline && is_term ())
     {

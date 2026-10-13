@@ -205,6 +205,15 @@ static void t_move (void *c, int x, int y) { (void) c; sprintf (trace + strlen (
 static void t_key (void *c, int ll, int d) { (void) c; sprintf (trace + strlen (trace), "k%02X%c ", ll, d ? 'd' : 'u'); }
 static void t_wheel (void *c, int dz, int dw) { (void) c; sprintf (trace + strlen (trace), "w%d,%d ", dz, dw); }
 
+static int click_ok = 1;
+static int t_click (void *c, int ll)
+{
+  (void) c;
+  if (!click_ok)
+    return -1;
+  sprintf (trace + strlen (trace), "C%02X ", ll);
+  return 0;
+}
 static unsigned fake_clock, clock_reads;
 static unsigned t_now (void *c) { (void) c; clock_reads++; return ++fake_clock; }
 
@@ -290,6 +299,92 @@ static void test_input (void)
   inq_move (&q, 120, 100);
   inq_run (&q, t + 10, &kc);
   CHECK (strcmp (trace, "m100,100 k70d m120,100 ") == 0, "a drag starts straight away");
+
+  /* With a click sink (RISC OS: up by ticker), a click whose up is queued
+     goes as one click, and the next change waits for that up. */
+  {
+    inq_sink kk = { t_move, t_key, t_wheel, t_now, t_click, NULL };
+    unsigned first = 0, second = 0;
+    inq_init (&q);
+    trace[0] = 0;
+    inq_move (&q, 10, 20);
+    inq_key (&q, 0x70, 1); inq_move (&q, 10, 20); inq_key (&q, 0x70, 0);
+    inq_key (&q, 0x70, 1); inq_key (&q, 0x70, 0);
+    for (i = 0; i < 40 && q.count > 0; i++)
+      {
+        size_t before = strlen (trace);
+        fake_clock = t + (unsigned) i;
+        inq_run (&q, fake_clock, &kk);
+        if (strlen (trace) != before && strstr (trace + before, "C70"))
+          {
+            if (!first) first = fake_clock; else second = fake_clock;
+          }
+        CHECK (!q.applied[0x70], "a click never leaves the button marked down");
+      }
+    CHECK (strcmp (trace, "m10,20 C70 m10,20 C70 ") == 0, "double-click: two whole clicks");
+    CHECK (second >= first + INQ_CLICK_CS + 1 + INQ_BETWEEN_CS,
+           "the second waits until the first's up has happened");
+    CHECK (q.count == 0, "nothing left over (the ups were taken by the clicks)");
+
+    /* A drag that arrives all at once (down, a long move, up) isn't a click. */
+    inq_init (&q);
+    trace[0] = 0;
+    inq_move (&q, 10, 20);
+    inq_run (&q, t, &kk);
+    inq_key (&q, 0x70, 1); inq_move (&q, 60, 20); inq_key (&q, 0x70, 0);
+    for (i = 0; i < 20 && q.count > 0; i++)
+      {
+        fake_clock = t + 10 + (unsigned) i;
+        inq_run (&q, fake_clock, &kk);
+      }
+    CHECK (strcmp (trace, "m10,20 k70d m60,20 k70u ") == 0, "a batched drag stays a drag");
+
+    /* Nor is a down with another key between it and its up. */
+    inq_init (&q);
+    trace[0] = 0;
+    inq_key (&q, 0x70, 1); inq_key (&q, 0x4C, 1); inq_key (&q, 0x70, 0);
+    for (i = 0; i < 20 && q.count > 0; i++)
+      {
+        fake_clock = t + 50 + (unsigned) i;
+        inq_run (&q, fake_clock, &kk);
+      }
+    CHECK (strcmp (trace, "k70d k4Cd k70u ") == 0, "keys between keep their order");
+
+    /* After a click, the wheel waits for its up. */
+    inq_init (&q);
+    trace[0] = 0;
+    inq_key (&q, 0x70, 1); inq_key (&q, 0x70, 0); inq_wheel (&q, 120, 0);
+    fake_clock = t + 80;
+    inq_run (&q, t + 80, &kk);
+    CHECK (strcmp (trace, "C70 ") == 0 && q.clicked, "the click, flagged for the caller");
+    inq_run (&q, t + 80 + INQ_CLICK_CS, &kk);
+    CHECK (strcmp (trace, "C70 ") == 0, "the wheel waits while the up is to come");
+    inq_run (&q, t + 80 + INQ_CLICK_CS + 1, &kk);
+    CHECK (strcmp (trace, "C70 w-1,0 ") == 0, "then turns");
+
+    /* No ticker (click fails): down and up go separately, as before. */
+    click_ok = 0;
+    inq_init (&q);
+    trace[0] = 0;
+    inq_key (&q, 0x70, 1); inq_key (&q, 0x70, 0);
+    for (i = 0; i < 10 && q.count > 0; i++)
+      {
+        fake_clock = t + 100 + (unsigned) i;
+        inq_run (&q, fake_clock, &kk);
+      }
+    CHECK (strcmp (trace, "k70d k70u ") == 0, "without a ticker: down, then up");
+    click_ok = 1;
+
+    /* Held: down alone, later up alone. */
+    inq_init (&q);
+    trace[0] = 0;
+    inq_key (&q, 0x72, 1);
+    inq_run (&q, t, &kk);
+    inq_run (&q, t + INQ_HOLD_CS, &kk);
+    inq_key (&q, 0x72, 0);
+    inq_run (&q, t + INQ_HOLD_CS + 10, &kk);
+    CHECK (strcmp (trace, "k72d k72u ") == 0, "a held button isn't a click");
+  }
 
   /* Moves in a row are merged; held keys aren't pressed twice. */
   inq_init (&q);

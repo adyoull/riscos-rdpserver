@@ -11,6 +11,7 @@
    Copyright (c) 2026 Andrew Youll. MIT licence (see LICENSE). */
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <kernel.h>
 #include <swis.h>
@@ -61,6 +62,98 @@ void
 plat_key (int low_level_key, int down)
 {
   _swix (OS_CallAVector, _INR (0, 1) | _IN (9), down ? 2 : 1, low_level_key, KeyV);
+}
+
+/* Clicks (see clickup.s): the routines are copied into an RMA block, with
+   a { key, pending } pair for each mouse button after them. OS_Module 6/7
+   (claim/free RMA), OS_SynchroniseCodeAreas 1 (new code), OS_CallAfter
+   (p289), OS_RemoveTickerEvent and OS_RemoveCallBack (p468). */
+extern const unsigned char rdps_clickup_ticker[], rdps_clickup_callback[],
+  rdps_clickup_end[];
+
+static int *clickup;                    /* the RMA block (word-aligned) */
+static int clickup_failed;
+
+#define CODE_BYTES ((size_t) (rdps_clickup_end - rdps_clickup_ticker))
+#define CALLBACK_AT ((size_t) (rdps_clickup_callback - rdps_clickup_ticker))
+
+static volatile int *
+click_slot (int ll)
+{
+  return clickup + (CODE_BYTES + 3) / 4 + 2 * (ll - 0x70);
+}
+
+static int
+clickup_init (void)
+{
+  size_t words = (CODE_BYTES + 3) / 4;
+  void *p = NULL;
+  if (clickup)
+    return 0;
+  if (clickup_failed)
+    return -1;
+  if (_swix (OS_Module, _INR (0, 0) | _IN (3) | _OUT (2), 6, (int) ((words + 6) * 4), &p)
+      || !p)
+    {
+      clickup_failed = 1;
+      return -1;
+    }
+  clickup = p;
+  memcpy (clickup, rdps_clickup_ticker, CODE_BYTES);
+  memset (clickup + words, 0, 6 * 4);
+  _swix (OS_SynchroniseCodeAreas, _INR (0, 2), 1, clickup,
+         (const char *) clickup + CODE_BYTES - 1);
+  return 0;
+}
+
+/* Stops a release still waiting for button ll and does it now. */
+static void
+click_cancel (int ll)
+{
+  volatile int *slot = click_slot (ll);
+  if (!slot[1])
+    return;
+  _swix (OS_RemoveTickerEvent, _INR (0, 1), clickup, slot);
+  _swix (OS_RemoveCallBack, _INR (0, 1), (const char *) clickup + CALLBACK_AT, slot);
+  if (slot[1])
+    {
+      slot[1] = 0;
+      plat_key (ll, 0);
+    }
+}
+
+int
+plat_click (int ll, unsigned up_after_cs)
+{
+  volatile int *slot;
+  if (ll < 0x70 || ll > 0x72 || clickup_init () != 0)
+    return -1;
+  slot = click_slot (ll);
+  click_cancel (ll);
+  plat_key (ll, 1);
+  slot[0] = ll;
+  slot[1] = 1;
+  if (_swix (OS_CallAfter, _INR (0, 2), (int) (up_after_cs ? up_after_cs : 1),
+             clickup, slot))
+    {
+      /* No ticker: let go now (a click, though a double-click may then
+         reach the Filer as a single one). */
+      slot[1] = 0;
+      plat_key (ll, 0);
+    }
+  return 0;
+}
+
+void
+plat_click_finish (void)
+{
+  int ll;
+  if (!clickup)
+    return;
+  for (ll = 0x70; ll <= 0x72; ll++)
+    click_cancel (ll);
+  _swix (OS_Module, _INR (0, 0) | _IN (2), 7, clickup);
+  clickup = NULL;
 }
 
 /* OS_Byte 121 (PRM p239) with internal key number EOR &80 checks one key:

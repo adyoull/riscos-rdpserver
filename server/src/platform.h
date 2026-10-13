@@ -31,6 +31,16 @@ void plat_mouse_to (const rdps_screen *s, int x, int y);
    low-level internal key number (PRM p1247; mouse buttons &70-&72). */
 void plat_key (int low_level_key, int down);
 
+/* A click: presses mouse button ll now, and lets go of it after
+   up_after_cs from a ticker event, so the release happens even if another
+   program has the machine by then (see clickup.s). Returns 0, or -1 if
+   nothing was done (no memory for the routines: the caller presses and
+   releases it itself). */
+int plat_click (int ll, unsigned up_after_cs);
+
+/* Cancels releases still waiting and does them now (when stopping). */
+void plat_click_finish (void);
+
 /* Which of Shift, Ctrl and Alt RISC OS thinks are held down (by any
    keyboard: ours or one plugged in), as PLAT_SHIFT | PLAT_CTRL | PLAT_ALT,
    with the keyboard status byte (OS_Byte 202) in bits 8-15. */

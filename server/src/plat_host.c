@@ -112,6 +112,22 @@ plat_key (int low_level_key, int down)
     shift_down = down;
 }
 
+/* The pretend RISC OS has no Filer: a click is a down and an up. */
+int
+plat_click (int ll, unsigned up_after_cs)
+{
+  (void) up_after_cs;
+  plat_key (ll, 1);
+  logline ("click-up-later %02X\n", ll, 0);
+  plat_key (ll, 0);
+  return 0;
+}
+
+void
+plat_click_finish (void)
+{
+}
+
 int
 plat_modifiers (void)
 {

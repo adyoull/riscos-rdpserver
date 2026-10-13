@@ -1,5 +1,20 @@
 # Changelog
 
+## RDPServer 0.1-test5 (13 October 2026)
+
+- test4 broke clicks altogether: pressing and releasing the button in the
+  same moment, without letting the desktop run in between, isn't seen as
+  a click. Now a click is: the button goes down, the desktop runs (the
+  Wimp sees it down), and a ticker event lets go of it 6 cs later, from a
+  small routine in the RMA (src/clickup.s), so the release happens even
+  while the Filer is busy checking for double-click-and-hold. After a
+  click the server goes straight back to the desktop.
+- Only a clean click goes that way: a down, small moves, its up. A drag
+  that arrives all at once, or other keys in between, go one by one.
+- Tests: the RMA routines run in an ARM emulator (Unicorn, through
+  riscos-crossdev's emu/): registers kept, the right KeyV call, the
+  pending word cleared.
+
 ## RDPServer 0.1-test4 (13 October 2026)
 
 - Double-clicks open applications as folders (and files in !Edit): found.

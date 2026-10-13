@@ -3,7 +3,7 @@
 #include <string.h>
 #include "input.h"
 
-enum { EV_MOVE = 1, EV_KEY, EV_WHEEL };
+enum { EV_DONE = 0, EV_MOVE = 1, EV_KEY, EV_WHEEL };
 
 void
 inq_init (inq *q)
@@ -95,17 +95,23 @@ is_button (int ll)
   return ll >= 0x70 && ll <= 0x72;
 }
 
-/* Is the up for button ll queued after event i? */
+/* Where the up for button ll is queued after event i, or -1. */
 static int
-up_queued (inq *q, int i, int ll)
+up_at (inq *q, int i, int ll)
 {
   for (i++; i < q->count; i++)
     {
       inq_event *e = slot (q, i);
       if (e->kind == EV_KEY && e->a == ll && e->b == 0)
-        return 1;
+        return i;
     }
-  return 0;
+  return -1;
+}
+
+static int
+up_queued (inq *q, int i, int ll)
+{
+  return up_at (q, i, ll) >= 0;
 }
 
 /* Is a move more than INQ_DRAG_PX from the pointer queued after event i? */
@@ -121,6 +127,26 @@ drag_queued (inq *q, int i)
         return 1;
     }
   return 0;
+}
+
+/* Can the down at event 0 and its up at u go as one click? Only if what
+   comes between them is small moves (or nothing): otherwise it's a drag,
+   or other keys whose order matters. */
+static int
+clean_click (inq *q, int u)
+{
+  int i;
+  for (i = 1; i < u; i++)
+    {
+      inq_event *e = slot (q, i);
+      if (e->kind == EV_DONE)
+        continue;
+      if (e->kind != EV_MOVE
+          || e->a - q->px > INQ_DRAG_PX || q->px - e->a > INQ_DRAG_PX
+          || e->b - q->py > INQ_DRAG_PX || q->py - e->b > INQ_DRAG_PX)
+        return 0;
+    }
+  return 1;
 }
 
 int
@@ -154,6 +180,23 @@ inq_run (inq *q, unsigned now, const inq_sink *s)
                 return q->count;
               now = s->now (s->ctx);
             }
+          /* A click whose up is here: one click, the up by ticker. The
+             next change waits until that up has happened. */
+          if (press && s->click && up_queued (q, 0, e->a)
+              && clean_click (q, up_at (q, 0, e->a))
+              && s->click (s->ctx, e->a) == 0)
+            {
+              slot (q, up_at (q, 0, e->a))->kind = EV_DONE;
+              /* Not down as far as release_all is concerned: the ticker
+                 (or plat_click_finish) lets go of it. */
+              q->applied[e->a] = 0;
+              q->clicked = 1;
+              q->last_change = now + INQ_CLICK_CS + 1;
+              q->changed = 1;
+              q->head = (q->head + 1) % INQ_MAX;
+              q->count--;
+              continue;
+            }
           s->key (s->ctx, e->a, e->b);
           q->applied[e->a] = (unsigned char) e->b;
           q->last_change = now;
@@ -163,6 +206,11 @@ inq_run (inq *q, unsigned now, const inq_sink *s)
           else if (is_button (e->a) && !e->b && q->holding == e->a)
             q->holding = 0;
         }
+      else if (e->kind != EV_DONE && q->changed
+               && (int) (now - q->last_change) < 0)
+        /* A click's up is still to come: the pointer and wheel keep
+           still until then. */
+        return q->count;
       else if (e->kind == EV_MOVE)
         {
           s->move (s->ctx, e->a, e->b);
@@ -171,7 +219,7 @@ inq_run (inq *q, unsigned now, const inq_sink *s)
           q->last_move = now;
           q->moved = 1;
         }
-      else
+      else if (e->kind == EV_WHEEL)
         s->wheel (s->ctx, e->a, e->b);
       q->head = (q->head + 1) % INQ_MAX;
       q->count--;
