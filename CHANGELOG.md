@@ -1,5 +1,24 @@
 # Changelog
 
+## RDPServer 0.2-test2 (13 October 2026)
+
+- 0.2-test1 crashed on the Pi as soon as the front end started the
+  server: "EMT trap" in RDPServer, the abort inside the Internet module
+  (`*Where`: Internet +&4A8). The server thread ran in SVC mode on its
+  own stack, and C modules such as Internet find their static data from
+  the base of the SVC stack: a SWI (or an interrupt handled by a C
+  module) with sp anywhere else reads rubbish. The thread now runs in USR
+  mode on its own stack, so its SWIs and interrupts use the SVC stack as
+  any program's do; it goes back to SVC mode with OS_EnterOS, and the
+  user sp and lr of whatever task was current are put back.
+- The emulator test now refuses a SWI made in SVC mode with sp off the
+  (8 KB) SVC stack, checks that the current task's user sp and lr come
+  back unchanged, calls the front end's entries in USR mode, and traps
+  unaligned accesses as RISC OS does. 0.2-test1 fails it.
+- The module is 0.03 (!Run's RMEnsure asks for it, so a 0.02 left loaded
+  by test1 is replaced).
+
+
 ## RDPServer 0.2-test1 (13 October 2026)
 
 - **The server is now a module** (`RDPSMod`, title RDPServer), so a

@@ -30,7 +30,9 @@ RDPS_CHOICES="$OUT/keys" RDPS_RESOURCES='app/!RDPServer' timeout 120 build/host/
 
 Xvfb "$DISP" -screen 0 1024x768x24 >/dev/null 2>&1 & XPID=$!
 sleep 1
-python3 tests/modserver.py build/module/RDPServer,ffa "$OUT/keys" $PORT "$OUT" 900 & SPID=$!
+# (no alignment check here: it makes each memory access a Python call, and
+# the RSA step then takes minutes; tests/test_module.py has it)
+EMU_ALIGN=0 python3 tests/modserver.py build/module/RDPServer,ffa "$OUT/keys" $PORT "$OUT" 900 & SPID=$!
 trap 'kill $SPID $XPID 2>/dev/null' EXIT
 for i in $(seq 1 30); do grep -q "listening on port" "$OUT/server.log" 2>/dev/null && break; sleep 1; done
 grep -q "listening on port $PORT" "$OUT/server.log" && ok "the module is listening" || { bad "the module didn't start"; cat "$OUT/server.log"; exit 1; }

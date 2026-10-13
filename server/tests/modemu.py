@@ -30,6 +30,7 @@ import struct
 import time
 
 from unicorn import Uc, UC_ARCH_ARM, UC_MODE_ARM, UC_HOOK_INTR, UC_HOOK_MEM_INVALID
+from unicorn import UC_HOOK_MEM_READ, UC_HOOK_MEM_WRITE
 from unicorn import arm_const as A
 
 REGS = [getattr(A, "UC_ARM_REG_R%d" % i) for i in range(13)]
@@ -43,6 +44,9 @@ USER = 0x00100000           # the "front end's" buffers
 USER_SIZE = 0x00100000
 SVC_TOP = 0x01F00000        # SVC stack (64 KB below)
 SVC_SIZE = 0x00100000
+SVC_REAL = 8192            # the SVC stack RISC OS 5 has
+USER_TOP = 0x00200000 - 0x100   # a user stack (top of USER)
+USER_LR = 0x7EAD0000       # the current task's user lr: must survive
 ERRS = 0x01C00000           # error blocks from pretend SWIs
 RMA = 0x02000000            # the module and RMA claims
 RMA_SIZE = 0x00800000
@@ -132,6 +136,12 @@ class RiscOS:
         mu.mem_write(RET, b"\xfe\xff\xff\xea")
         mu.hook_add(UC_HOOK_INTR, self._swi_hook)
         mu.hook_add(UC_HOOK_MEM_INVALID, self._bad_mem)
+        # RISC OS runs with alignment checking on: a 16/32-bit access that
+        # isn't aligned to its size (LDRD/STRD and LDM/STM: to 4) aborts.
+        # Unicorn doesn't trap them, so look at every access.
+        self.align_check = os.environ.get("EMU_ALIGN", "1") != "0"
+        if self.align_check:
+            mu.hook_add(UC_HOOK_MEM_READ | UC_HOOK_MEM_WRITE, self._align)
         mu.reg_write(A.UC_ARM_REG_CPSR, 0x13)       # SVC32, interrupts on
         self.verbose = verbose
         self.t0 = time.monotonic()
@@ -170,6 +180,15 @@ class RiscOS:
         pc = mu.reg_read(A.UC_ARM_REG_PC)
         self.fatal = "bad memory access at &%X (pc &%X, module +&%X)" % (addr, pc, pc - self.base)
         return False
+
+    def _align(self, mu, access, addr, size, value, data):
+        need = 4 if size >= 4 else size
+        if need > 1 and addr % need:
+            pc = mu.reg_read(A.UC_ARM_REG_PC)
+            if not self.fatal:
+                self.fatal = ("unaligned %d-byte access at &%X (pc &%X, module +&%X): "
+                              "an alignment fault on RISC OS" % (size, addr, pc, pc - self.base))
+            mu.emu_stop()
 
     def w32(self, a, v):
         self.mu.mem_write(a, struct.pack("<I", v & 0xFFFFFFFF))
@@ -220,17 +239,29 @@ class RiscOS:
         self.mu.mem_write(SCREEN, bytes(img))
 
     # --- running code ---
-    def call(self, addr, r=(), r12=None, max_insns=0):
+    def _mode(self, mode):
+        cpsr = self.mu.reg_read(A.UC_ARM_REG_CPSR)
+        self.mu.reg_write(A.UC_ARM_REG_CPSR, (cpsr & 0x0FFFFF00) | mode)
+
+    def call(self, addr, r=(), r12=None, max_insns=0, usr=False):
+        """Calls addr: in SVC mode (sp = the empty SVC stack), as the kernel
+        calls a module's handlers, or with usr=True in USR mode (sp = a user
+        stack), as a program calls the module's table. Either way the user
+        sp and lr (the current task's) must come back unchanged."""
         mu = self.mu
         regs = list(r) + [0] * (13 - len(r))
         if r12 is not None:
             regs[12] = r12
+        self._mode(0x13)
+        mu.reg_write(A.UC_ARM_REG_SP, SVC_TOP)
+        mu.reg_write(A.UC_ARM_REG_LR, RET if not usr else 0xBAD00000)
+        self._mode(0x10)
+        mu.reg_write(A.UC_ARM_REG_SP, USER_TOP)
+        mu.reg_write(A.UC_ARM_REG_LR, RET if usr else USER_LR)
+        if not usr:
+            self._mode(0x13)
         for i, x in enumerate(REGS):
             mu.reg_write(x, regs[i] & 0xFFFFFFFF)
-        mu.reg_write(A.UC_ARM_REG_SP, SVC_TOP)
-        mu.reg_write(A.UC_ARM_REG_LR, RET)
-        cpsr = mu.reg_read(A.UC_ARM_REG_CPSR)
-        mu.reg_write(A.UC_ARM_REG_CPSR, (cpsr & 0x0FFFFF00) | 0x13)
         try:
             mu.emu_start(addr, RET, count=max_insns)
         except Exception as e:
@@ -242,9 +273,20 @@ class RiscOS:
         pc = mu.reg_read(A.UC_ARM_REG_PC)
         if pc != RET:
             raise Fatal("code at &%X didn't return (pc &%X, module +&%X)" % (addr, pc, pc - self.base))
-        if mu.reg_read(A.UC_ARM_REG_SP) != SVC_TOP:
+        cpsr = mu.reg_read(A.UC_ARM_REG_CPSR)
+        out = [mu.reg_read(x) for x in REGS]
+        if (cpsr & 0x1F) != (0x10 if usr else 0x13):
+            raise Fatal("code at &%X returned in mode &%X" % (addr, cpsr & 0x1F))
+        if mu.reg_read(A.UC_ARM_REG_SP) != (USER_TOP if usr else SVC_TOP):
             raise Fatal("code at &%X left the stack unbalanced" % addr)
-        return [mu.reg_read(x) for x in REGS], mu.reg_read(A.UC_ARM_REG_CPSR)
+        self._mode(0x10)
+        usp, ulr = mu.reg_read(A.UC_ARM_REG_SP), mu.reg_read(A.UC_ARM_REG_LR)
+        self._mode(0x13)
+        if usp != USER_TOP or (not usr and ulr != USER_LR):
+            raise Fatal("code at &%X changed the current task's user sp/lr "
+                        "(&%X/&%X)" % (addr, usp, ulr))
+        self._mode(cpsr & 0x1F)
+        return out, cpsr
 
     def init(self):
         regs, cpsr = self.call(self.base + self.hdr[1], r12=self.pw)
@@ -265,7 +307,7 @@ class RiscOS:
     def entry(self, n, *args):
         """Calls entry n of the front end's table with R12 = the workspace."""
         ws = self.r32(self.pw)
-        regs, _ = self.call(self.base + self.entries[n], r=list(args), r12=ws)
+        regs, _ = self.call(self.base + self.entries[n], r=list(args), r12=ws, usr=True)
         return regs[0] if regs[0] < 0x80000000 else regs[0] - (1 << 32)
 
     def bytev(self, r0, r1, r2):
@@ -307,6 +349,17 @@ class RiscOS:
         if (num & ~XBIT) == SWI["OS_CallASWIR12"]:
             num = mu.reg_read(A.UC_ARM_REG_R12) & 0xFFFFFF
         cpsr = mu.reg_read(A.UC_ARM_REG_CPSR) & ~VFLAG
+        # RISC OS: a SWI called in SVC mode must have sp on the SVC stack
+        # (8 KB on RISC OS 5): C modules (Internet...) find their static
+        # data from its base, so anywhere else they abort (0.2-test1 on the
+        # Pi: inside Internet +&4A8).
+        sp = mu.reg_read(A.UC_ARM_REG_SP)
+        if (cpsr & 0x1F) == 0x13 and not (SVC_TOP - SVC_REAL <= sp <= SVC_TOP):
+            self.fatal = ("SWI %s called with sp &%X, not on the SVC stack (pc &%X, "
+                          "module +&%X)" % (NAMES.get(num & ~XBIT, "&%X" % num), sp, pc,
+                                            pc - self.base))
+            mu.emu_stop()
+            return
         try:
             err = self.swi(num & ~XBIT, r)
         except Fatal as e:
@@ -322,6 +375,10 @@ class RiscOS:
             cpsr |= VFLAG
         for x, v in zip(REGS[:10], r):
             mu.reg_write(x, v & 0xFFFFFFFF)
+        if (num & ~XBIT) == SWI["OS_EnterOS"]:
+            cpsr = (cpsr & ~0x1F) | 0x13
+        elif (num & ~XBIT) == SWI["OS_LeaveOS"]:
+            cpsr = (cpsr & ~0x1F) | 0x10
         mu.reg_write(A.UC_ARM_REG_CPSR, cpsr)
 
     def sock_error(self, e):
