@@ -414,7 +414,13 @@ session_up (server *s)
     s->scr = cur;
   }
   if (s->opt->verbose)
-    say ("key exchange: the RSA step took %u cs", rdps_modexp_cs);
+    {
+      say ("key exchange: the RSA step took %u cs", rdps_modexp_cs);
+      if (rdps_sndbuf)
+        say ("send buffer: %d KB", rdps_sndbuf / 1024);
+      else
+        say ("send buffer: the default (a bigger one was refused)");
+    }
   s->client_bpp = ci->bpp;
   if (cap_init (&s->cap, s->scr.width, s->scr.height, pix_bytes (s->fmt)) != 0)
     return -1;

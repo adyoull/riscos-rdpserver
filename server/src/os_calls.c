@@ -220,12 +220,36 @@ g_sck_listen (int sck)
   return listen (sck, 2);
 }
 
+/* The client's send buffer, as big as the stack allows (bytes; 0 if
+   none could be set), and bytes sent in all: see srvthread.h. */
+int rdps_sndbuf;
+unsigned rdps_bytes_sent;
+
 int
 g_sck_accept (int sck)
 {
   struct sockaddr_in sa;
   socklen_t len = sizeof sa;
-  return accept (sck, (struct sockaddr *) &sa, &len);
+  int s = accept (sck, (struct sockaddr *) &sa, &len);
+  if (s >= 0)
+    {
+      /* A big send buffer: in the module, the Internet module's own work
+         (taking in ACKs, sending what's queued) runs in callbacks, which
+         wait until the server's turn ends (it runs in SYS mode), so a turn
+         can only hand over what fits in the buffer. Tried smaller until
+         the stack takes it. */
+      static const int sizes[] = { 256 * 1024, 128 * 1024, 64 * 1024 };
+      size_t i;
+      rdps_sndbuf = 0;
+      for (i = 0; i < sizeof sizes / sizeof sizes[0]; i++)
+        if (setsockopt (s, SOL_SOCKET, SO_SNDBUF, (char *) &sizes[i],
+                        sizeof sizes[i]) == 0)
+          {
+            rdps_sndbuf = sizes[i];
+            break;
+          }
+    }
+  return s;
 }
 
 int
@@ -237,7 +261,10 @@ g_sck_recv (int sck, void *ptr, unsigned int len, int flags)
 int
 g_sck_send (int sck, const void *ptr, unsigned int len, int flags)
 {
-  return (int) send (sck, ptr, len, flags);
+  int n = (int) send (sck, ptr, len, flags);
+  if (n > 0)
+    rdps_bytes_sent += (unsigned) n;
+  return n;
 }
 
 int

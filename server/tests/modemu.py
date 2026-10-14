@@ -167,6 +167,8 @@ class RiscOS:
         self.wheel = []
         self.vars = {}
         self.redirect = 0       # this many screen reads see a sprite
+        self.sndbuf_max = 128 * 1024  # the stack's SO_SNDBUF limit (pretend)
+        self.sndbuf = 0          # the client socket's, as set
         self.kill_armed = False  # stop "the task" at a USR return in the thread
         self.unwind_next = False  # throw away the thread at its next SWI
         self.killed_in_thread = 0
@@ -663,6 +665,12 @@ class RiscOS:
                     s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, val)
                 elif r[1] == 6 and r[2] == 1:
                     s.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, val)
+                elif r[1] == 0xFFFF and r[2] == 0x1001:
+                    # SO_SNDBUF; sndbuf_max pretends the stack's limit
+                    if val > self.sndbuf_max:
+                        return self.error(0x20E00 | 55, "No buffer space available")
+                    s.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, val)
+                    self.sndbuf = val
                 r[0] = 0
             elif n == SOCK["Getsockopt"]:
                 if r[1] == 0xFFFF and r[2] == 4103:

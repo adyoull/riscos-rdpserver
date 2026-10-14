@@ -38,7 +38,7 @@
 #include "wimp.h"
 #endif
 
-#define VERSION "0.2-test6"
+#define VERSION "0.2-test7"
 
 #ifndef __riscos
 static void

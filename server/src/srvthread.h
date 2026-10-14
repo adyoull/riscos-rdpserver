@@ -53,6 +53,11 @@ void rdps_wait_cs (unsigned cs);
    all: server_step's "longest step" leaves them out. */
 extern unsigned rdps_yielded_cs;
 
+/* os_calls.c: the client's send buffer size (bytes, 0 if the default),
+   and bytes sent to clients in all (the module looks for progress). */
+extern int rdps_sndbuf;
+extern unsigned rdps_bytes_sent;
+
 /* 1 while the client is being dropped or the server stopped: libxrdp's
    waits end (server.c's is_term). */
 int rdps_thread_ending (void);

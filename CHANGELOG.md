@@ -1,5 +1,28 @@
 # Changelog
 
+## RDPServer 0.2-test7 (14 October 2026)
+
+- Redraws on the client were slower in 0.2-test6 than in test5 (owner,
+  with both Logs: in test6, while the screen changed, many scans waited
+  for the client to catch up and steps took up to 8 cs; in test5 almost
+  none waited). The Internet module does its TCP work (taking in the
+  client's ACKs, sending what's queued) in transient callbacks. With the
+  server thread in USR mode those ran inside the server's turn, at every
+  SWI; in SYS mode (test6, needed so Alt-Break can't throw the server
+  away) they wait until the turn ends, so a turn could only hand over
+  what fitted in the socket's send buffer. Now:
+  - the client's socket gets a 256 KB send buffer (128 KB or 64 KB if
+    the stack won't have that; -v logs the size);
+  - after a turn that sent something and has more to do within 1 cs,
+    the module asks for its next turn at once instead of at the next
+    tick, so the Internet module's callbacks and the server's turns
+    interleave; at most 4 such turns within 1 cs, and one burst per
+    2 cs, so the desktop keeps at least half its time.
+    `*Set RDPServer$ExtraTurns 0` (0 to 8, read when the server starts)
+    turns them off, for comparing.
+- The module is 0.08.
+
+
 ## RDPServer 0.2-test6 (14 October 2026)
 
 - The server stopped for good when a program that had run away was

@@ -221,6 +221,7 @@ try:
     c = socket.create_connection(("127.0.0.1", port), timeout=2)
     run_for(m, 60)     # an idle server looks every 25 cs
     st = status(m)
+    check(m.sndbuf == 128 * 1024, "the client's send buffer: 256 KB refused, 128 KB taken (%d)" % m.sndbuf)
     check(st["connecting"] == 1, "and a client is taken on (%r %r)" % (st, messages(m)[-300:]))
     c.close()
     run_for(m, 20)
@@ -240,8 +241,11 @@ m.service(0, 0x53, 0x1234)            # Service_WimpCloseDown, the front end
 run_for(m, 60)
 msgs = messages(m)
 check(status(m)["listening"] == 0, "the front end went: not started again (%r)" % msgs[-200:])
+m.vars["RDPServer$ExtraTurns"] = "2"
 check(m.entry(ATTACH, 0x1234) == 0 and m.entry(START, options(m, port)) == 0,
       "attached and started again by the front end")
+check("extra turns: 2" in messages(m), "RDPServer$ExtraTurns read at the start")
+del m.vars["RDPServer$ExtraTurns"]
 check(status(m)["listening"] == 1, "listening")
 
 # --- 7: stop, detach, finalise ----------------------------------------------
