@@ -12,7 +12,7 @@ include $(RCD_DIR)/riscos.mk
 .DEFAULT_GOAL := all
 
 VERSION := 0.2
-TESTSUFFIX := -test12
+TESTSUFFIX := -test13
 B := build
 X := $(B)/xrdp
 XRDP_H = $(wildcard $(X)/common/*.h $(X)/libxrdp/*.h)
@@ -40,9 +40,11 @@ APP_SRC := src/main.c src/wimp.c src/modclient.c src/auth.c src/keygen.c src/ssl
 APP_XRDP := $(addprefix $(X)/common/,string_calls.c log.c list.c file.c parse.c)
 RO_OBJ := $(patsubst %.c,$(RO)/%.o,$(notdir $(APP_SRC) $(APP_XRDP))) $(RO)/clickup.o $(RO)/modcall.o
 RO_MBED := $(patsubst %.c,$(RO)/mbed/%.o,$(notdir $(MBED_SRC)))
-RO_CFLAGS := $(RISCOS_CFLAGS) -ffile-prefix-map=$(CURDIR)=rdpserver $(INC)
+VERSION_DEF := -DRDPS_VERSION='"$(VERSION)$(TESTSUFFIX)"'
+RO_CFLAGS := $(RISCOS_CFLAGS) -ffile-prefix-map=$(CURDIR)=rdpserver $(INC) $(VERSION_DEF)
 
 all: $(B)/RDPServer-$(VERSION)$(TESTSUFFIX).zip
+
 
 $(RO)/%.o: $(X)/libxrdp/%.c $(XRDP_H) | $(RO)
 	$(RO_CC) $(RO_CFLAGS) $(XRDP_FLAGS) -c $< -o $@
@@ -134,7 +136,7 @@ $(MO)/RDPServer,ffa: $(MO)/module.elf tools/modlink.py
 # --- Linux, with a pretend screen ------------------------------------------
 HO := $(B)/host
 HOST_CC ?= gcc
-HOST_CFLAGS := -O1 -g $(INC)
+HOST_CFLAGS := -O1 -g $(INC) $(VERSION_DEF)
 HO_OBJ := $(patsubst %.c,$(HO)/%.o,$(notdir $(XRDP_SRC) $(OUR_SRC))) $(HO)/plat_host.o
 HO_MBED := $(patsubst %.c,$(HO)/mbed/%.o,$(notdir $(MBED_SRC)))
 
@@ -156,7 +158,7 @@ $(HO)/rdpserver: $(HO_OBJ) $(HO)/libmbedcrypto.a
 
 # --- ARM Linux, for qemu-arm-aligntrap -----------------------------------
 QO := $(B)/qemu
-QEMU_CFLAGS := $(LINUXARM_CFLAGS) $(INC)
+QEMU_CFLAGS := $(LINUXARM_CFLAGS) $(INC) $(VERSION_DEF)
 QO_OBJ := $(patsubst %.c,$(QO)/%.o,$(notdir $(XRDP_SRC) $(OUR_SRC))) $(QO)/plat_host.o
 QO_MBED := $(patsubst %.c,$(QO)/mbed/%.o,$(notdir $(MBED_SRC)))
 
@@ -230,3 +232,6 @@ clean:
 	rm -rf $(RO) $(HO) $(QO) $(MO) $(B)/app $(B)/*.zip $(B)/tests
 
 .PHONY: module all host qemu check checks test-units test-units-qemu test-fake test-fake-wimp test-fake-modclient test-emu test-mod-fmt test-module clean
+
+# the version is compiled into main.c (here, after RO, HO and QO are set)
+$(RO)/main.o $(HO)/main.o $(QO)/main.o: Makefile

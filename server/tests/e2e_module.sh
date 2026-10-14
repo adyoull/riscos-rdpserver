@@ -182,7 +182,7 @@ kill $CPID 2>/dev/null; wait $CPID 2>/dev/null
 # then on while the client still gets the sound.
 sleep 2
 u=$(ups)
-sums () { grep -c "sound: [0-9]* blocks sent" "$OUT/server.log"; }
+sums () { grep -c "sound ended: [0-9]* blocks sent" "$OUT/server.log"; }
 s0=$(sums)
 xfreerdp3 /v:localhost:$PORT /u:test /p:x /sec:rdp /cert:ignore /bpp:32 /sound:sys:fake >"$OUT/freerdp-sound.log" 2>&1 & CPID=$!
 for i in $(seq 1 30); do [ "$(ups)" -gt "$u" ] && break; sleep 1; done
@@ -199,16 +199,26 @@ ctl "mute 0"
 sleep 3
 [ "$(grep 'emu: sound: ' "$OUT/server.log" | tail -1 | sed -n 's/.* \([0-9]*\) muted/\1/p')" = 0 ] \
   && ok "and unmuted" || bad "still muted: $(grep 'emu: sound:' "$OUT/server.log" | tail -1)"
+ctl takesound
+for i in $(seq 1 12); do grep -q "another program took over the sound output" "$OUT/server.log" && break; sleep 0.5; done
+grep -q "another program took over the sound output" "$OUT/server.log" \
+  && ok "the sound output taken over: noticed, sound to the client stops, nothing breaks" || bad "takeover not noticed"
 kill $CPID 2>/dev/null; wait $CPID 2>/dev/null
 for i in $(seq 1 20); do grep -q "emu: sound handlers: 0" "$OUT/server.log" && [ "$(grep -c 'emu: sound handlers: 0' "$OUT/server.log")" -ge "$(grep -c 'emu: sound handlers: 1' "$OUT/server.log")" ] && break; sleep 0.5; done
 [ "$(grep -c 'emu: sound handlers: 0' "$OUT/server.log")" -ge "$(grep -c 'emu: sound handlers: 1' "$OUT/server.log")" ] \
   && ok "the handler is removed when the client goes" || bad "a sound handler left installed"
 wait_for sums $((s0 + 1)) 10
-line=$(grep "sound: [0-9]* blocks sent" "$OUT/server.log" | tail -1)
-sent=$(echo "$line" | sed -n 's/.*sound: \([0-9]*\) blocks sent, \([0-9]*\) confirmed.*/\1/p')
-conf=$(echo "$line" | sed -n 's/.*sound: \([0-9]*\) blocks sent, \([0-9]*\) confirmed.*/\2/p')
+line=$(grep "sound ended: [0-9]* blocks sent" "$OUT/server.log" | tail -1)
+sent=$(echo "$line" | sed -n 's/.*sound ended: \([0-9]*\) blocks sent, \([0-9]*\) confirmed.*/\1/p')
+conf=$(echo "$line" | sed -n 's/.*sound ended: \([0-9]*\) blocks sent, \([0-9]*\) confirmed.*/\2/p')
 [ "${sent:-0}" -ge 100 ] && [ "${conf:-0}" -ge $((sent - 10)) ] && [ "${conf:-0}" -le "${sent:-0}" ] \
   && ok "sound: $sent blocks sent, $conf confirmed" || bad "sound: '$line'"
+grep "sound ended: the sound system gave" "$OUT/server.log" | tail -1 | grep -q "gave [1-9][0-9]* buffers, [1-9][0-9]* with sound" \
+  && ok "the log says what the sound system gave" || bad "no sound-system figures: '$line'"
+grep -q "sound after 5 s: [1-9][0-9]* blocks sent" "$OUT/server.log" \
+  && ok "and a report 5 s in" || bad "no 5 s report"
+grep -q "sound after 5 s: output handler before ours &[0-9A-F]* (SharedSound's); SharedSound kept on" "$OUT/server.log" \
+  && ok "the capture wrapped SharedSound's output handler" || bad "handler: $(grep 'output handler' "$OUT/server.log" | tail -1)"
 
 # --- 6: a wrong password --------------------------------------------------
 sleep 2

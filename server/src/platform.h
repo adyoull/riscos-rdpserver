@@ -79,6 +79,21 @@ int plat_sound_rate (unsigned *rate_hz);     /* what the computer plays at */
 int plat_sound_start (unsigned *rate_hz);
 int plat_sound_read (void *buf, int bytes, int max_behind);
 void plat_sound_mute (int on);
+/* For the log: what the sound system has done since plat_sound_start. */
+typedef struct
+{
+  unsigned calls;       /* buffers it gave us */
+  unsigned with_sound;  /* of those, ones that had sound in them */
+  unsigned rate;        /* the frequency it last said (as it gives it) */
+  unsigned flags;       /* its last flags */
+  unsigned written;     /* bytes put in the ring */
+  unsigned before;      /* the output handler before ours (0: none) */
+  int before_ss;        /* that was SharedSound's */
+  int keep;             /* our SharedSound handler is installed */
+} plat_sound_info;
+void plat_sound_stats (plat_sound_info *i);
+/* 1 while the capture still has the sound (no other program took it). */
+int plat_sound_ok (void);
 void plat_sound_stop (void);
 
 /* Path of the folder for rsakeys.ini, xrdp.ini and so on, and of the

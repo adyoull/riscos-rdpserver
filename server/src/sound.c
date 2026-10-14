@@ -232,6 +232,7 @@ client_pdu (rdps_sound *snd, const unsigned char *pdu, int len)
       if (snd->stage == 2)
         {
           snd->stage = 3;
+          snd->playing_cs = plat_time_cs ();
           plat_sound_mute (snd->mute_local);
           if (snd->verbose)
             snd->say ("sound: training round trip %u cs",
@@ -287,6 +288,26 @@ sound_channel_data (rdps_sound *snd, int chan, int flags, const void *data,
     }
 }
 
+/* What came from the sound system and what went to the client: in the
+   log 5 s after the sound starts, and when it ends. */
+static void
+report (rdps_sound *snd, const char *when)
+{
+  plat_sound_info i;
+  memset (&i, 0, sizeof i);
+  if (snd->capturing)
+    plat_sound_stats (&i);
+  snd->say ("sound %s: %u blocks sent, %u confirmed, %u silent ones not sent%s",
+            when, snd->sent, snd->confirmed, snd->silent_skipped,
+            snd->unconfirmed_resets ? "; confirms stopped coming at times" : "");
+  snd->say ("sound %s: the sound system gave %u buffers, %u with sound "
+            "(%u KB, %u Hz, flags &%X)", when, i.calls, i.with_sound,
+            i.written / 1024, (i.rate + 512) / 1024, i.flags);
+  snd->say ("sound %s: output handler before ours &%X%s%s", when, i.before,
+            i.before_ss ? " (SharedSound's)" : (i.before ? "" : " (none)"),
+            i.keep ? "; SharedSound kept on" : "");
+}
+
 static int
 silent (const unsigned char *b, int n)
 {
@@ -305,6 +326,11 @@ sound_step (rdps_sound *snd)
   int block = (int) (snd->rate * 4 * BLOCK_MS / 1000) & ~3;
   if (snd->stage != 3 || block <= 4 || block > MAX_BLOCK)
     return 0;
+  if (!snd->told && (int) (plat_time_cs () - snd->playing_cs) >= 500)
+    {
+      snd->told = 1;
+      report (snd, "after 5 s");
+    }
   /* Another program changed the sample rate: the client would play it at
      the wrong speed. Looked at once a second. */
   if ((int) (plat_time_cs () - snd->rate_checked_cs) >= 100)
@@ -315,6 +341,13 @@ sound_step (rdps_sound *snd)
         {
           snd->say ("sound: the sample rate changed to %u Hz: no more sound to "
                     "the client this session", rate);
+          sound_stop (snd, 1);
+          return 0;
+        }
+      if (!plat_sound_ok ())
+        {
+          snd->say ("sound: another program took over the sound output: no more "
+                    "sound to the client this session");
           sound_stop (snd, 1);
           return 0;
         }
@@ -376,15 +409,14 @@ sound_stop (rdps_sound *snd, int send)
       header (pdu, SNDC_CLOSE, 0);
       send_pdu (snd, pdu, 4);
     }
+  if (snd->stage == 3 && snd->say)
+    report (snd, "ended");
   if (snd->capturing)
     {
       plat_sound_mute (0);
       plat_sound_stop ();
     }
-  if (snd->sent && snd->say)
-    snd->say ("sound: %u blocks sent, %u confirmed%s", snd->sent, snd->confirmed,
-              snd->unconfirmed_resets ? " (confirms stopped coming at times)" : "");
-  snd->sent = snd->confirmed = snd->unconfirmed_resets = 0;
+  snd->sent = snd->confirmed = snd->unconfirmed_resets = snd->silent_skipped = 0;
   snd->capturing = 0;
   snd->stage = 0;
   snd->chan = -1;

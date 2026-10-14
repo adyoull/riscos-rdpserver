@@ -72,7 +72,8 @@ SWI = dict(OS_Byte=0x06, OS_Word=0x07, OS_EnterOS=0x16, OS_Heap=0x1D, OS_Module=
            OS_DynamicArea=0x66, OS_SynchroniseCodeAreas=0x6E, OS_CallASWIR12=0x71,
            OS_LeaveOS=0x7C, TaskManager_TaskNameFromHandle=0x42680,
            CryptRandom_Block=0x51983, Sound_SampleRate=0x40146,
-           SharedSound_InstallHandler=0x4B440, SharedSound_RemoveHandler=0x4B441)
+           SharedSound_InstallHandler=0x4B440, SharedSound_RemoveHandler=0x4B441,
+           Sound_LinearHandler=0x40145, Emu_SharedSoundFill=0x4F000)
 SOCK = dict(Creat=0x41200, Bind=0x41201, Listen=0x41202, Connect=0x41204,
             Recv=0x41205, Send=0x41208, Shutdown=0x4120B, Setsockopt=0x4120C,
             Getsockopt=0x4120D, Close=0x41210, Select=0x41211, Ioctl=0x41212,
@@ -190,6 +191,14 @@ class RiscOS:
         self.snd_calls = 0
         self.snd_muted = 0       # buffers the handler silenced
         self.snd_silent = 0      # buffers without data the handler zeroed
+        # SoundDMA's 16-bit linear handler; SharedSound's (a SWI back to
+        # here) while it has handlers, as the real one installs itself
+        self.ss_code = ERRS + 0xF000
+        mu.mem_write(self.ss_code, struct.pack("<II", 0xEF000000 | SWI["Emu_SharedSoundFill"],
+                                              0xE1A0F00E))       # swi; mov pc, lr
+        self.lin = (0, 0xFFFFFFFF)
+        self.ss_fill = b""
+        self.lin_installs = 0
         self.sw, self.sh, self.screen = SW, SH, SCREEN
         self.draw_screen()
         data = open(module_file, "rb").read()
@@ -353,6 +362,8 @@ class RiscOS:
             return self.string(regs[0] + 4)
         if self.snd_handlers:
             raise Fatal("killed with a SharedSound handler still installed")
+        if self.lin[0] not in (0, self.ss_code):
+            raise Fatal("killed with the linear handler still wrapped (&%X)" % self.lin[0])
         return None
 
     def service(self, r0, r1, r2=0):
@@ -395,11 +406,13 @@ class RiscOS:
     # --- SharedSound ---
     SND_FRAMES = 1024
     def sound_due(self):
-        """SharedSound's process handlers, on a callback, for each 1024
-        frames (4 KB, 16-bit stereo) of 48 kHz time gone by: a triangle
-        wave, every 7th buffer with no data in it (flags bit 0 clear, the
-        buffer holding junk the handler must make silence)."""
-        if not self.snd_handlers:
+        """For each 1024 frames (4 KB) of 48 kHz time gone by: SharedSound's
+        callback (its process handlers, R3 = 0: they must write zeros),
+        then SoundDMA's buffer fill calling the linear handler (R3 = 0,
+        data invalid). The emulated SharedSound linear handler writes a
+        triangle wave, every 7th buffer silence; whatever wraps it must
+        leave that in the buffer (or zeros, muted) and keep R11."""
+        if not self.snd_handlers and self.lin[0] in (0, self.ss_code):
             self.snd_t0 = None
             return
         if self.snd_buf is None:
@@ -410,33 +423,40 @@ class RiscOS:
         due = int((now - self.snd_t0) * 48000)
         if due - self.snd_frames > 24000:          # behind by half a second
             self.snd_frames = due - self.SND_FRAMES
-        while self.snd_frames + self.SND_FRAMES <= due and self.snd_handlers:
-            n = self.SND_FRAMES
-            has_data = self.snd_calls % 7 != 6
-            if has_data:
-                v = [((self.snd_frames + i) % 109) for i in range(n)]
-                v = [(p * 400 - 11000) if p < 55 else ((109 - p) * 400 - 11000) for p in v]
-                data = struct.pack("<%dh" % (2 * n), *[x for y in v for x in (y, y)])
-            else:
-                data = b"\xa5" * (4 * n)
+        n = self.SND_FRAMES
+        junk = b"\xa5" * (4 * n)
+        while self.snd_frames + n <= due:
             for h, (addr, param, typ) in sorted(self.snd_handlers.items()):
-                self.mu.mem_write(self.snd_buf, data)
-                regs = [param, self.snd_buf, self.snd_buf + 4 * n, 1 if has_data else 0,
-                        48000 * 1024, 0, 0, 0xFFFFFFFF, 0, 0x5A5A5A5A]
+                self.mu.mem_write(self.snd_buf, junk)
+                regs = [param, self.snd_buf, self.snd_buf + 4 * n, 0, 48000 * 1024,
+                        0, 0, 0xFFFFFFFF, 0, 0x5A5A5A5A]
                 out, _ = self.call(addr, r=regs)
                 if not out[3] & 1:
-                    raise Fatal("sound handler left R3 bit 0 clear (no data)")
-                for i in (0, 1, 2, 4, 5, 6, 7, 8, 9):
-                    if out[i] != regs[i] & 0xFFFFFFFF:
-                        raise Fatal("sound handler changed R%d" % i)
+                    raise Fatal("SharedSound handler left R3 bit 0 clear (no data)")
+                if bytes(self.mu.mem_read(self.snd_buf, 4 * n)) != bytes(4 * n):
+                    raise Fatal("SharedSound handler didn't write zeros")
+            if self.lin[0]:
+                if self.snd_calls % 7 == 6:
+                    data = bytes(4 * n)
+                else:
+                    v = [((self.snd_frames + i) % 109) for i in range(n)]
+                    v = [(p * 400 - 11000) if p < 55 else ((109 - p) * 400 - 11000) for p in v]
+                    data = struct.pack("<%dh" % (2 * n), *[x for y in v for x in (y, -y)])
+                self.ss_fill = data
+                self.mu.mem_write(self.snd_buf, junk)
+                regs = [self.lin[1], self.snd_buf, self.snd_buf + 4 * n, 0, 48000 * 1024,
+                        0, 0, 0, 0, 0, 0, 0x11111111]
+                out, _ = self.call(self.lin[0], r=regs)
+                if out[11] != 0x11111111:
+                    raise Fatal("the linear handler changed R11")
                 after = bytes(self.mu.mem_read(self.snd_buf, 4 * n))
-                if after == bytes(4 * n):
-                    if has_data:
-                        self.snd_muted += 1
-                    else:
+                if after == data:
+                    if data == bytes(4 * n):
                         self.snd_silent += 1
-                elif after != data or not has_data:
-                    raise Fatal("sound handler changed the sound without muting it")
+                elif after == bytes(4 * n):
+                    self.snd_muted += 1
+                else:
+                    raise Fatal("the linear handler changed the sound without muting it")
             self.snd_calls += 1
             self.snd_frames += n
 
@@ -588,6 +608,10 @@ class RiscOS:
         elif n == SWI["OS_Module"]:
             if r[0] == 6:
                 r[2] = self.rma_claim(r[3])
+            elif r[0] == 18 and self.string(r[1]) == "SharedSound":
+                r[3] = self.ss_code & ~0xFFF     # its code is in "its" module
+            elif r[0] == 18:
+                return self.error(0x107, "Module not found")
             elif r[0] != 7:
                 raise Fatal("OS_Module %d" % r[0])
         elif n == SWI["OS_DynamicArea"]:
@@ -660,10 +684,30 @@ class RiscOS:
             self.snd_handlers[self.snd_next] = (r[0], r[1], r[4] if r[2] & 1 else 0)
             r[0] = self.snd_next
             self.snd_next += 1
+            if self.lin[0] == 0:
+                self.lin = (self.ss_code, 0x55AA)   # SharedSound starts its driver
         elif n == SWI["SharedSound_RemoveHandler"]:
             if r[0] not in self.snd_handlers:
                 return self.error(0x1E6, "no such sound handler")
             del self.snd_handlers[r[0]]
+            if not self.snd_handlers and self.lin[0] == self.ss_code:
+                self.lin = (0, 0xFFFFFFFF)          # and stops it
+        elif n == SWI["Sound_LinearHandler"]:
+            if r[0] == 0:
+                r[1], r[2] = self.lin
+            elif r[0] == 1:
+                old = self.lin
+                self.lin = (r[1], r[2] if r[1] else 0xFFFFFFFF)
+                r[1], r[2] = old
+                self.lin_installs += 1
+            else:
+                raise Fatal("Sound_LinearHandler %d" % r[0])
+        elif n == SWI["Emu_SharedSoundFill"]:
+            if r[0] != 0x55AA:
+                raise Fatal("SharedSound's linear handler called with R0 &%X" % r[0])
+            self.mu.mem_write(r[1], self.ss_fill[:r[2] - r[1]])
+            for i in range(10):
+                r[i] = 0xDEAD0000 + i              # R0-R10 corruptible
         elif n == SWI["OS_GenerateError"]:
             raise Fatal("OS_GenerateError: " + self.string(r[0] + 4))
         elif (n & ~0x3F) == 0x41200:

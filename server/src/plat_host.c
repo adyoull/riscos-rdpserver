@@ -278,6 +278,25 @@ plat_sound_read (void *buf, int bytes, int max_behind)
   return bytes;
 }
 
+int
+plat_sound_ok (void)
+{
+  return snd_on && !getenv ("RDPS_HOST_SOUND_TAKEN");
+}
+
+void
+plat_sound_stats (plat_sound_info *i)
+{
+  i->calls = (unsigned) (snd_made / 1024);
+  i->with_sound = getenv ("RDPS_HOST_SILENT") ? 0 : i->calls;
+  i->rate = 48000 * 1024;
+  i->flags = 1;
+  i->written = (unsigned) snd_made * 4;
+  i->before = 0;
+  i->before_ss = 0;
+  i->keep = 0;
+}
+
 void
 plat_sound_mute (int on)
 {

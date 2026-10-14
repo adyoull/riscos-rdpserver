@@ -38,7 +38,11 @@
 #include "wimp.h"
 #endif
 
-#define VERSION "0.2-test10"
+/* from the Makefile (VERSION and TESTSUFFIX), so it can't fall behind */
+#ifndef RDPS_VERSION
+#define RDPS_VERSION "dev"
+#endif
+#define VERSION RDPS_VERSION
 
 #ifndef __riscos
 static void

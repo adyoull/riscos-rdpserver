@@ -34,6 +34,8 @@ typedef struct
   unsigned char in[4096];
   int in_len, in_total, in_bad, in_started;
   unsigned rate_checked_cs;
+  unsigned playing_cs;      /* when training finished (stage 3) */
+  int told;                 /* the 5 s report was logged */
   void (*say) (const char *fmt, ...);
   int verbose;
 } rdps_sound;

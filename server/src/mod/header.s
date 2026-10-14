@@ -67,7 +67,7 @@ bss_start:      .word   0
 bss_end:        .word   0
 
 title:  .asciz  "RDPServer"
-help:   .asciz  "RDPServer\t0.12 (14 Oct 2026) RDP server (the !RDPServer front end runs it)"
+help:   .asciz  "RDPServer\t0.13 (14 Oct 2026) RDP server (the !RDPServer front end runs it)"
         .balign 4
 flags:  .word   1                               @ 32-bit compatible
 
@@ -228,55 +228,109 @@ errorbox_open_addr:
         ENTRY   e_messages, mod_messages
         ENTRY   e_set_mute, mod_set_mute
 
-@ --- the SharedSound process handler (sndcap.c) ---------------------------
-@ SharedSound calls it after all other handlers, on a callback, with the
-@ mixed buffer (PRM SharedSound_InstallHandler): R0 = rdps_snd (the
-@ parameter), R1 = the buffer, R2 = its end, R3 = flags (bit 0: the buffer
-@ has data), R4 = the sample frequency. It copies the buffer into the ring
-@ (zeros if it has no data yet), then silences the buffer if rdps_snd says
-@ mute. R3 comes back with bit 0 set (SharedSound needs data written).
-        .equ    S_BASE, 0
-        .equ    S_MASK, 4
-        .equ    S_WR, 8
-        .equ    S_RATE, 12
-        .equ    S_FLAGS, 16
-        .equ    S_MUTE, 20
+@ --- capturing the sound (sndcap.c) ----------------------------------------
+@ A SharedSound "process" handler can't hear everything: SharedSound calls
+@ process handlers on a callback with only what its callback handlers made,
+@ while players using immediate handlers fill the DMA buffer directly
+@ (SharedSnd source, doHandlerCallBack%). So the capture wraps SoundDMA's
+@ 16-bit linear handler instead, which makes the final mix
+@ (Sound_LinearHandler, PRM p639; entry: R0 = workspace, R1 = buffer, R2 =
+@ end, R3 bits 0-2: 0 invalid, 1 8-bit data converted, 2 all zeros, R4 =
+@ rate in 1/1024 Hz; IRQ or SVC mode; R0-R10 corruptible, R11-R13 kept).
+@
         .text
-        .global rdps_snd_handler
-rdps_snd_handler:
-        stmfd   sp!, {r0-r2, r4-r9, lr}
-        str     r4, [r0, #S_RATE]
-        str     r3, [r0, #S_FLAGS]
-        tst     r3, #1
-        bne     1f
-        mov     r9, #0                  @ no data in it yet: make it silence
-        mov     r8, r1
-0:      cmp     r8, r2
-        strlo   r9, [r8], #4
-        blo     0b
-        orr     r3, r3, #1
-1:      ldr     r5, [r0, #S_BASE]
+@ rdps_lin_stub .. rdps_lin_stub_end: position-independent, copied into
+@ the RMA with its workspace (struct lin_ws in sndcap.c) after it, so it
+@ can stay behind, passing straight through, if another program took the
+@ linear handler over after us and we can't put the old one back. It
+@ calls the handler it replaced, then (while active) copies the buffer
+@ into the ring and silences it if mute is set.
+        .equ    L_OLD, 0
+        .equ    L_OLDWS, 4
+        .equ    L_ACTIVE, 8
+        .equ    L_BASE, 12
+        .equ    L_MASK, 16
+        .equ    L_WR, 20
+        .equ    L_MUTE, 24
+        .equ    L_CALLS, 28
+        .equ    L_RATE, 32
+        .equ    L_FLAGS, 36
+        .equ    L_SOUND, 40
+        .global rdps_lin_stub
+        .global rdps_lin_stub_end
+rdps_lin_stub:
+        stmfd   sp!, {r0-r3, r11, lr}           @ (6 words: sp stays 8-aligned)
+        str     r3, [r0, #L_FLAGS]              @ (the old handler may corrupt them)
+        str     r4, [r0, #L_RATE]
+        ldr     r5, [r0, #L_OLD]
         cmp     r5, #0
-        beq     3f
-        ldr     r6, [r0, #S_MASK]
-        ldr     r7, [r0, #S_WR]
+        beq     1f
+        ldr     r0, [r0, #L_OLDWS]
+        blx     r5                              @ the old handler mixes first
+        ldmia   sp, {r0-r2}
+        b       2f
+1:      and     r6, r3, #7                      @ none: invalid data -> silence
+        cmp     r6, #0
+        bne     2f
+        mov     r6, #0
+        mov     r7, r1
+0:      cmp     r7, r2
+        strlo   r6, [r7], #4
+        blo     0b
+2:      ldr     r6, [r0, #L_ACTIVE]
+        cmp     r6, #0
+        beq     9f
+        ldr     r6, [r0, #L_CALLS]
+        add     r6, r6, #1
+        str     r6, [r0, #L_CALLS]
+        ldr     r5, [r0, #L_BASE]
+        cmp     r5, #0
+        beq     9f
+        ldr     r6, [r0, #L_MASK]
+        ldr     r7, [r0, #L_WR]
         mov     r8, r1
-2:      cmp     r8, r2
+        mov     r11, #0                         @ any sound at all?
+3:      cmp     r8, r2
         bhs     4f
         ldr     r9, [r8], #4
-        and     lr, r7, r6
-        str     r9, [r5, lr]
+        orr     r11, r11, r9
+        and     r10, r7, r6
+        str     r9, [r5, r10]
         add     r7, r7, #4
-        b       2b
-4:      str     r7, [r0, #S_WR]
-        ldr     r9, [r0, #S_MUTE]
+        b       3b
+4:      str     r7, [r0, #L_WR]
+        cmp     r11, #0
+        ldrne   r6, [r0, #L_SOUND]
+        addne   r6, r6, #1
+        strne   r6, [r0, #L_SOUND]
+        ldr     r9, [r0, #L_MUTE]
         cmp     r9, #0
-        beq     3f
+        beq     9f
         mov     r9, #0
 5:      cmp     r1, r2
         strlo   r9, [r1], #4
         blo     5b
-3:      ldmfd   sp!, {r0-r2, r4-r9, pc}
+9:      ldmfd   sp!, {r0-r3, r11, pc}
+
+@ rdps_keep_handler (copied with the stub): a SharedSound process handler
+@ that only keeps SharedSound active, so it is the linear handler before
+@ we wrap it and doesn't put itself back over us. It writes zeros when
+@ nothing has (SharedSound must be given data). In the RMA copy too, so
+@ nothing ever calls into the module's own code.
+        .global rdps_keep_handler
+rdps_keep_handler:
+        tst     r3, #1
+        movne   pc, lr
+        stmfd   sp!, {r1, r4}
+        mov     r4, #0
+0:      cmp     r1, r2
+        strlo   r4, [r1], #4
+        blo     0b
+        orr     r3, r3, #1
+        ldmfd   sp!, {r1, r4}
+        mov     pc, lr
+        .align  2
+rdps_lin_stub_end:
 
 @ --- _kernel_oserror *rdps_swi (int swi, int *r) ---------------------------
         .text

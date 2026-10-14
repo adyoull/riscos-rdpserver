@@ -215,9 +215,9 @@ kill $CPID 2>/dev/null; wait $CPID 2>/dev/null
 for i in $(seq 1 10); do [ "$(grep -c "client gone" "$OUT/server.log")" -gt "$before_gone" ] && break; sleep 1; done
 grep -q "sound: to the client, 48000 Hz 16-bit stereo" "$OUT/server.log" \
   && ok "sound: the client takes 48 kHz 16-bit stereo" || bad "sound: no format agreed: $(grep 'sound' "$OUT/server.log" | tail -2)"
-line=$(grep "sound: [0-9]* blocks sent" "$OUT/server.log" | tail -1)
-sent=$(echo "$line" | sed -n 's/.*sound: \([0-9]*\) blocks sent, \([0-9]*\) confirmed.*/\1/p')
-conf=$(echo "$line" | sed -n 's/.*sound: \([0-9]*\) blocks sent, \([0-9]*\) confirmed.*/\2/p')
+line=$(grep "sound ended: [0-9]* blocks sent" "$OUT/server.log" | tail -1)
+sent=$(echo "$line" | sed -n 's/.*sound ended: \([0-9]*\) blocks sent, \([0-9]*\) confirmed.*/\1/p')
+conf=$(echo "$line" | sed -n 's/.*sound ended: \([0-9]*\) blocks sent, \([0-9]*\) confirmed.*/\2/p')
 # 5 s of 40 ms blocks: about 125; the client confirms nearly all of them
 [ "${sent:-0}" -ge 60 ] && [ "${conf:-0}" -ge $((sent - 10)) ] && [ "${conf:-0}" -le "${sent:-0}" ] \
   && ok "sound: $sent blocks sent, $conf confirmed" || bad "sound: '$line'"
@@ -227,7 +227,7 @@ grep -q "^sound mute 1$" "$OUT/input.log" && [ "$(grep '^sound mute' "$OUT/input
 # (-v) said so; FreeRDP plays sound by default.
 [ "$(grep -c "sound: the client has no sound output" "$OUT/server.log")" -eq 5 ] \
   && ok "no sound for the clients without an output (rdesktop)" || bad "no-output clients: $(grep -c 'no sound output' "$OUT/server.log")"
-[ "$(grep -c "sound: [0-9]* blocks sent" "$OUT/server.log")" -eq "$(grep -c "sound: to the client" "$OUT/server.log")" ] \
+[ "$(grep -c "sound ended: [0-9]* blocks sent" "$OUT/server.log")" -eq "$(grep -c "sound: to the client" "$OUT/server.log")" ] \
   && ok "one sound summary per session that had sound" || bad "sound summaries: $(grep -c 'blocks sent' "$OUT/server.log") for $(grep -c 'sound: to the client' "$OUT/server.log") sessions"
 
 kill -INT $SPID; wait $SPID; status=$?

@@ -1,5 +1,37 @@
 # Changelog
 
+## RDPServer 0.2-test13 (14 October 2026)
+
+- Sound now reaches the client from any player (owner: "no sound" with
+  Windows App on test12). test12's log showed the client agreeing the
+  format and the training round trip, then no sound blocks at all: the
+  SharedSound "process" handler it used only sees what SharedSound's
+  callback handlers make (SharedSound calls process handlers on a
+  callback, with its callback buffer), while players that use immediate
+  handlers fill the DMA buffer directly and never pass through it.
+- The capture now wraps SoundDMA's 16-bit linear handler, which makes
+  the final mix: a small position-independent copy in the RMA becomes the
+  linear handler, calls the one it replaced (SharedSound's), copies the
+  result for the client, and silences it when muted. A SharedSound
+  handler is still installed first, only to keep SharedSound the linear
+  handler meanwhile. Both are in the RMA copy, so nothing calls the
+  module's own code; when the session ends the old handler is put back
+  and the copy freed, unless another program took over after us (then it
+  stays, passing through).
+- Left and right: the linear handler has right in the low half of each
+  word; it's swapped for RDP (left first).
+- If another program takes the sound output over mid-session, the log
+  says so and sound to that client stops.
+- The log says what the sound system gave, 5 s in and at the end
+  (buffers, how many had sound, the rate, the handler we wrapped), to
+  find the next problem quickly.
+- The front end's version now comes from the Makefile (test11 and 12
+  said "0.2-test10" in the log).
+- Second-opinion review of the new capture: no crash-class findings; its
+  suggestions (8-byte stack alignment, keep handler in the RMA, free the
+  copy only when nothing can call it, better log) are in.
+- The module is 0.13.
+
 ## RDPServer 0.2-test12 (14 October 2026)
 
 - test11 wouldn't start: "The RDPServer module loaded is a different

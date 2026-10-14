@@ -17,6 +17,7 @@ commands written to OUTDIR/ctl (one per line, read as they appear):
   mode WxH    a pretend mode change (new size, the screen moves)
   disconnect  the front end's Disconnect (drops the client at once)
   mute N      Choices' "mute this computer while a client listens" (0/1)
+  takesound   another program takes SoundDMA's linear handler over
   stop        stop and exit
 
 Copyright (c) 2026 Andrew Youll. MIT licence (see LICENSE).
@@ -182,6 +183,10 @@ try:
                         st = status()
                         say("disconnect took %.0f ms; connecting %d, connected %d"
                             % ((time.monotonic() - t0) * 1000, st[1], st[2]))
+                    elif cmd == "takesound":
+                        # SharedSound puts itself back as SoundDMA's linear
+                        # handler (as after a sound configuration change)
+                        m.lin = (m.ss_code, 0x55AA)
                     elif cmd.startswith("mute "):
                         say("mute: %d" % m.entry(SET_MUTE, int(cmd.split()[1])))
                     elif cmd == "status":
