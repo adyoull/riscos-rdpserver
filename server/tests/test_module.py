@@ -246,6 +246,23 @@ check(m.entry(ATTACH, 0x1234) == 0 and m.entry(START, options(m, port)) == 0,
       "attached and started again by the front end")
 check("extra turns: 2" in messages(m), "RDPServer$ExtraTurns read at the start")
 del m.vars["RDPServer$ExtraTurns"]
+# RDPServer$ThreadMode USR (comparing only): the thread runs in USR mode
+m.entry(STOP)
+m.vars["RDPServer$ThreadMode"] = "USR"
+check(m.entry(START, options(m, port)) == 0 and "runs in USR mode" in messages(m),
+      "RDPServer$ThreadMode USR: started, and said so")
+try:
+    c = socket.create_connection(("127.0.0.1", port), timeout=2)
+    run_for(m, 60)
+    check(status(m)["connecting"] == 1, "USR mode: a client is taken on")
+    c.close()
+    run_for(m, 20)
+except OSError as e:
+    check(False, "USR mode: the port takes connections (%s)" % e)
+m.entry(STOP)
+del m.vars["RDPServer$ThreadMode"]
+check(m.entry(START, options(m, port)) == 0 and "runs in USR mode" not in messages(m),
+      "and back in SYS mode")
 check(status(m)["listening"] == 1, "listening")
 
 # --- 7: stop, detach, finalise ----------------------------------------------

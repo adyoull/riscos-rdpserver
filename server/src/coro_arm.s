@@ -39,6 +39,9 @@
         .global co_yield
         .global co_inside
         .global co_reset
+        .global co_thread_mode
+
+        .equ    XOS_EnterOS, 0x20016
 
 @ co_state layout
         .equ    OUT, 0          @ outside: r4-r11, lr (9 words), sp
@@ -55,6 +58,10 @@
         .balign 4
 co_state:
         .space  100
+        .data
+        .balign 4
+co_thread_mode:                 @ 0x1F SYS (normal), 0x10 USR (for comparing only)
+        .word   0x1F
         .text
 
 @ int co_start (void (*fn) (void *), void *arg, void *stack, size_t size)
@@ -114,7 +121,10 @@ co_resume:
         ldr     r3, [ip, #IN_LR]
         mrs     r0, cpsr
         bic     r0, r0, #0x9F           @ mode bits and I
-        orr     r0, r0, #0x1F           @ SYS32, interrupts on
+        ldr     r1, =co_thread_mode
+        ldr     r1, [r1]
+        and     r1, r1, #0x1F
+        orr     r0, r0, r1              @ SYS32 (or USR32), interrupts on
         msr     cpsr_c, r0
         mov     sp, r2                  @ (the user sp now)
         bx      r3                      @ co_yield's return, or the trampoline
@@ -131,6 +141,9 @@ co_yield:
         mov     r0, #0
         str     r0, [ip, #INSIDE]
 back_to_svc:
+        mrs     r0, cpsr
+        tst     r0, #0xF                @ USR mode (comparing only): privileged first
+        swieq   XOS_EnterOS
         ldr     ip, =co_state
         ldr     r0, [ip, #OUT_PSR]
         msr     cpsr_c, r0              @ SVC mode as co_resume was; sp: the SVC stack where we left it

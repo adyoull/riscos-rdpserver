@@ -1,5 +1,28 @@
 # Changelog
 
+## RDPServer 0.2-test8 (14 October 2026)
+
+A test build to find out why the server's own work is slower since
+test6. test7's Log (owner: the first desktop still appears in stripes,
+"on test 5 it was just there") shows the RSA step at 17 cs, against 5 cs
+in test5: that's pure arithmetic, almost no SWIs, so the slowdown isn't
+only the network or SWIs. The first full picture took 84 cs of work
+against 32 cs. The only difference is the thread's processor mode: SYS
+since test6, USR before.
+
+- With -v (as !Run has), the module times the same four loops once when
+  the server starts: arithmetic, copying memory, 20000 SWIs and 5000
+  heap claims, first in its own context (SVC mode), then inside the
+  server thread. The Log shows them as "benchmark (...)" lines.
+- `*Set RDPServer$ThreadMode USR` before starting runs the thread in USR
+  mode as test5 did, for comparing only: in USR mode other programs'
+  callbacks come inside the thread. A program stopped with Alt-Break
+  then loses it (the safety net starts it again), and UnixLib's pthread
+  switcher (whose callback saves whatever USR registers it finds as its
+  own thread's) could take it over. The Log says when it's on.
+- The module is 0.09.
+
+
 ## RDPServer 0.2-test7 (14 October 2026)
 
 - Redraws on the client were slower in 0.2-test6 than in test5 (owner,
