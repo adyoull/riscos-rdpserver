@@ -184,6 +184,16 @@ rdps_cmd_reload_logins (void)
   return server_reload_logins ();
 }
 
+/* Likewise: only flags the thread reads at a wait. */
+int
+rdps_cmd_set_mute (int on)
+{
+  if (!ready || co_inside ())
+    return -1;
+  server_set_mute (on);
+  return 0;
+}
+
 void
 rdps_cmd_disconnect (void)
 {

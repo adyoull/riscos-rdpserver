@@ -70,6 +70,8 @@ static int m_status (int s, int b, int c)
   snprintf (ms->st.user, sizeof ms->st.user, "andrew");
   return 0;
 }
+static int mute_arg = -1;
+static int m_set_mute (int on, int b, int c) { (void) b; (void) c; mute_arg = on; return 0; }
 static int m_messages (int seqp, int buf, int size)
 {
   unsigned *seq = (unsigned *) (intptr_t) seqp;
@@ -84,7 +86,7 @@ static int m_messages (int seqp, int buf, int size)
 
 typedef int entry_fn (int, int, int);
 static entry_fn *const fns[RDPS_MOD_ENTRIES] = {
-  m_attach, m_detach, m_set_file, m_start, m_stop, m_disconnect, m_reload, m_status, m_messages };
+  m_attach, m_detach, m_set_file, m_start, m_stop, m_disconnect, m_reload, m_status, m_messages, m_set_mute };
 
 /* modcall.s, here in C */
 int
@@ -192,6 +194,7 @@ main (void)
   o.ini = ini;
   o.logins = logins;
   o.interval_cs = 10;
+  o.mute_local = 1;
   o.rows_per_scan = 128;
   o.verbose = 1;
   o.log_file = xlog;
@@ -234,7 +237,8 @@ main (void)
          "no logins file: an empty one given");
   CHECK (strcmp (started.port, "3390") == 0 && strcmp (started.ini, ini) == 0
          && strcmp (started.logins, logins) == 0 && started.interval_cs == 10
-         && started.rows_per_scan == 128 && started.verbose == 1, "the options passed");
+         && started.rows_per_scan == 128 && started.verbose == 1 && started.mute_local == 1,
+         "the options passed");
 
   /* Messages: the server's to the hook, libxrdp's to XrdpLog */
   nsaid = 0;
@@ -260,6 +264,8 @@ main (void)
   CHECK (server_reload_logins () == 0 && nfiles == 1 && strcmp (files[0], logins) == 0
          && strcmp (file_data[0], "test 00 00\n") == 0 && calls[RDPS_MOD_RELOAD_LOGINS] == 1,
          "new logins: the file again, then reload");
+  server_set_mute (0);
+  CHECK (calls[RDPS_MOD_SET_MUTE] == 1 && mute_arg == 0, "Choices' mute goes to the module");
   server_finish ();
   CHECK (calls[RDPS_MOD_STOP] == 1, "server_finish stops it");
   CHECK (calls[RDPS_MOD_DETACH] == 0 && killed == 0, "but keeps the module");

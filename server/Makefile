@@ -12,7 +12,7 @@ include $(RCD_DIR)/riscos.mk
 .DEFAULT_GOAL := all
 
 VERSION := 0.2
-TESTSUFFIX := -test10
+TESTSUFFIX := -test11
 B := build
 X := $(B)/xrdp
 XRDP_H = $(wildcard $(X)/common/*.h $(X)/libxrdp/*.h)
@@ -22,7 +22,7 @@ MO := $(B)/module
 XRDP_SRC := $(wildcard $(X)/libxrdp/*.c) \
   $(addprefix $(X)/common/,parse.c list.c list16.c log.c trans.c string_calls.c \
                             file.c fifo.c pixman-region16.c base64.c guid.c)
-OUR_SRC := src/server.c src/srvthread.c src/input.c src/auth.c src/capture.c src/pixels.c src/keymap.c \
+OUR_SRC := src/server.c src/srvthread.c src/input.c src/auth.c src/capture.c src/pixels.c src/keymap.c src/sound.c \
            src/keygen.c src/os_calls.c src/ssl_calls.c src/main.c src/coro_ucontext.c
 MBED_SRC := $(filter-out %/entropy_poll.c %/net_sockets.c %/timing.c,$(wildcard $(M)/library/*.c))
 
@@ -63,7 +63,7 @@ $(RO)/rdpserver: $(RO_OBJ) $(RO)/libmbedcrypto.a | riscos-toolchain-present
 
 checks: $(RO)/rdpserver
 	$(CHECK_ALL) $(RO)/rdpserver
-	$(CHECK_UNALIGNED) -s tools/unaligned-safe.txt $(INC) $(APP_SRC) $(addprefix src/,$(MOD_OUR)) src/mod/module.c src/mod/libc.c src/mod/fmt.c
+	$(CHECK_UNALIGNED) -s tools/unaligned-safe.txt $(INC) $(APP_SRC) $(addprefix src/,$(MOD_OUR)) src/mod/module.c src/mod/libc.c src/mod/fmt.c src/mod/sndcap.c
 
 APP_FILES := !Run,feb !Boot,feb !Help,fff xrdp.ini
 ICONS := app/icons/rdpserver.png app/icons/sm-rdpserver.png app/icons/rdpserver-on.png
@@ -94,10 +94,11 @@ MOD_CFLAGS := -O2 -march=armv7-a -mfloat-abi=soft -mno-unaligned-access -fno-pic
   -mword-relocations -fstack-clash-protection -ffunction-sections -fdata-sections \
   -fno-common -fno-unwind-tables -fno-asynchronous-unwind-tables -DRDPS_MODULE \
   -ffile-prefix-map=$(CURDIR)=rdpserver $(INC)
-MOD_OUR := server.c srvthread.c input.c auth.c capture.c pixels.c keymap.c os_calls.c \
+MOD_OUR := server.c srvthread.c input.c auth.c capture.c pixels.c keymap.c sound.c os_calls.c \
            ssl_calls.c plat_riscos.c
 MOD_OBJ := $(patsubst %.c,$(MO)/%.o,$(notdir $(XRDP_SRC) $(MOD_OUR))) \
-           $(MO)/module.o $(MO)/libc.o $(MO)/fmt.o $(MO)/header.o $(MO)/coro_arm.o $(MO)/clickup.o
+           $(MO)/module.o $(MO)/libc.o $(MO)/fmt.o $(MO)/header.o $(MO)/coro_arm.o $(MO)/clickup.o \
+           $(MO)/sndcap.o
 MOD_MBED := $(patsubst %.c,$(MO)/mbed/%.o,$(notdir $(MBED_SRC)))
 LIBGCC = $(shell $(RO_CC) -print-libgcc-file-name)
 

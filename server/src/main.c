@@ -53,7 +53,8 @@ static int
 usage (void)
 {
   fprintf (stderr, "Usage: RDPServer [-p port] [-a address] [-i centiseconds] "
-           "[-r rows] [-t seconds] [-v]\n"
+           "[-r rows] [-t seconds] [-m] [-v]\n"
+           "       (-m: mute this computer while a client listens)\n"
            "       RDPServer -setlogin NAME PASSWORD\n"
            "       RDPServer -clearlogin\n");
   return 2;
@@ -98,6 +99,8 @@ main (int argc, char **argv)
       const char *v = i + 1 < argc ? argv[i + 1] : NULL;
       if (strcmp (a, "-v") == 0)
         o.verbose = 1;
+      else if (strcmp (a, "-m") == 0)
+        o.mute_local = 1;
       else if (v && strcmp (a, "-p") == 0)
         o.port = argv[++i];
       else if (v && strcmp (a, "-a") == 0)

@@ -175,6 +175,41 @@ sleep 3; shot freerdp-arc
 expect freerdp-arc 100,400 0,0,255 "after reconnecting: blue"
 kill $CPID 2>/dev/null; wait $CPID 2>/dev/null
 
+# --- 5c: sound ------------------------------------------------------------
+# The module's SharedSound process handler copies the pretend 48 kHz stream
+# (every 7th buffer with no data, to be made silence) to the client over
+# rdpsnd; Choices' mute (the SET_MUTE entry) silences the computer from
+# then on while the client still gets the sound.
+sleep 2
+u=$(ups)
+sums () { grep -c "sound: [0-9]* blocks sent" "$OUT/server.log"; }
+s0=$(sums)
+xfreerdp3 /v:localhost:$PORT /u:test /p:x /sec:rdp /cert:ignore /bpp:32 /sound:sys:fake >"$OUT/freerdp-sound.log" 2>&1 & CPID=$!
+for i in $(seq 1 30); do [ "$(ups)" -gt "$u" ] && break; sleep 1; done
+sleep 4
+n0=$(grep -c "sound: to the client, 48000 Hz 16-bit stereo" "$OUT/server.log")
+[ "$n0" -ge 1 ] && ok "sound: the client takes 48 kHz 16-bit stereo" || bad "sound: no format agreed: $(grep 'sound' "$OUT/server.log" | tail -2)"
+grep -q "emu: sound handlers: 1" "$OUT/server.log" && ok "a SharedSound process handler is installed" || bad "no sound handler"
+ctl "mute 1"
+sleep 3
+grep -q "emu: mute: 0" "$OUT/server.log" && ok "Choices' mute reaches the module" || bad "mute entry: $(grep 'emu: mute' "$OUT/server.log")"
+grep "emu: sound: [0-9]* buffers, [1-9][0-9]* muted" "$OUT/server.log" >/dev/null \
+  && ok "this computer muted from then on" || bad "not muted: $(grep 'emu: sound:' "$OUT/server.log" | tail -2 | tr '\n' ' ')"
+ctl "mute 0"
+sleep 3
+[ "$(grep 'emu: sound: ' "$OUT/server.log" | tail -1 | sed -n 's/.* \([0-9]*\) muted/\1/p')" = 0 ] \
+  && ok "and unmuted" || bad "still muted: $(grep 'emu: sound:' "$OUT/server.log" | tail -1)"
+kill $CPID 2>/dev/null; wait $CPID 2>/dev/null
+for i in $(seq 1 20); do grep -q "emu: sound handlers: 0" "$OUT/server.log" && [ "$(grep -c 'emu: sound handlers: 0' "$OUT/server.log")" -ge "$(grep -c 'emu: sound handlers: 1' "$OUT/server.log")" ] && break; sleep 0.5; done
+[ "$(grep -c 'emu: sound handlers: 0' "$OUT/server.log")" -ge "$(grep -c 'emu: sound handlers: 1' "$OUT/server.log")" ] \
+  && ok "the handler is removed when the client goes" || bad "a sound handler left installed"
+wait_for sums $((s0 + 1)) 10
+line=$(grep "sound: [0-9]* blocks sent" "$OUT/server.log" | tail -1)
+sent=$(echo "$line" | sed -n 's/.*sound: \([0-9]*\) blocks sent, \([0-9]*\) confirmed.*/\1/p')
+conf=$(echo "$line" | sed -n 's/.*sound: \([0-9]*\) blocks sent, \([0-9]*\) confirmed.*/\2/p')
+[ "${sent:-0}" -ge 100 ] && [ "${conf:-0}" -ge $((sent - 10)) ] && [ "${conf:-0}" -le "${sent:-0}" ] \
+  && ok "sound: $sent blocks sent, $conf confirmed" || bad "sound: '$line'"
+
 # --- 6: a wrong password --------------------------------------------------
 sleep 2
 u=$(ups)

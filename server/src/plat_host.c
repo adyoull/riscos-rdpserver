@@ -226,3 +226,66 @@ plat_choices_dir (void)
   const char *d = getenv ("RDPS_CHOICES");
   return d ? d : ".";
 }
+
+/* --- sound (tests): a 440 Hz tone at 48 kHz, made as it would be played:
+   as much as real time has passed since the start. RDPS_HOST_SILENT set:
+   silence instead (the server skips silent blocks). Mute is logged. */
+static int snd_on;
+static unsigned snd_start_cs;
+static unsigned long snd_made;          /* frames handed out */
+
+int
+plat_sound_rate (unsigned *rate_hz)
+{
+  *rate_hz = 48000;
+  return 0;
+}
+
+int
+plat_sound_start (unsigned *rate_hz)
+{
+  snd_on = 1;
+  snd_start_cs = plat_time_cs ();
+  snd_made = 0;
+  *rate_hz = 48000;
+  return 0;
+}
+
+int
+plat_sound_read (void *buf, int bytes, int max_behind)
+{
+  unsigned long played;
+  int frames = bytes / 4, i;
+  short *p = buf;
+  if (!snd_on || bytes <= 0 || (bytes & 3))
+    return 0;
+  played = (unsigned long) (plat_time_cs () - snd_start_cs) * 480;
+  (void) max_behind;
+  if (played - snd_made > 48000)        /* behind by over a second: catch up */
+    snd_made = played - 24000;
+  if (played - snd_made < (unsigned long) frames)
+    return 0;
+  for (i = 0; i < frames; i++)
+    {
+      /* a triangle wave near 440 Hz (no libm): period 109 frames */
+      int ph = (int) ((snd_made + (unsigned long) i) % 109);
+      int v = getenv ("RDPS_HOST_SILENT") ? 0
+              : (ph < 55 ? ph * 400 - 11000 : (109 - ph) * 400 - 11000);
+      p[2 * i] = (short) v;
+      p[2 * i + 1] = (short) v;
+    }
+  snd_made += (unsigned long) frames;
+  return bytes;
+}
+
+void
+plat_sound_mute (int on)
+{
+  logline ("sound mute %d\n", on, 0);
+}
+
+void
+plat_sound_stop (void)
+{
+  snd_on = 0;
+}

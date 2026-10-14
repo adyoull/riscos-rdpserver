@@ -69,6 +69,18 @@ void plat_set_clients (int n);
 /* Centiseconds, monotonic. */
 unsigned plat_time_cs (void);
 
+/* Sound: what the computer plays (all of it, mixed), 16-bit stereo
+   little-endian, left first. Start gives the rate (Hz); 0, or -1 if
+   there's no sound system to listen to. Read copies exactly bytes (a
+   multiple of 4) of what was played since, oldest first, or returns 0 if
+   fewer have been played yet; if the reader fell behind, the oldest are
+   lost. Mute silences this computer's own output (the capture goes on). */
+int plat_sound_rate (unsigned *rate_hz);     /* what the computer plays at */
+int plat_sound_start (unsigned *rate_hz);
+int plat_sound_read (void *buf, int bytes, int max_behind);
+void plat_sound_mute (int on);
+void plat_sound_stop (void);
+
 /* Path of the folder for rsakeys.ini, xrdp.ini and so on, and of the
    folder for things the server writes. */
 const char *plat_resources_dir (void);

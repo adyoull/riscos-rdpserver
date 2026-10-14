@@ -1,5 +1,29 @@
 # Changelog
 
+## RDPServer 0.2-test11 (14 October 2026)
+
+- Sound to the client (owner: "I want to look at piping the audio to
+  the client"). What RISC OS plays (a SharedSound process handler in the
+  module, so it hears everything mixed) goes to the client over RDP's
+  audio output channel (RDPSND): 16-bit stereo PCM at the computer's
+  sample rate, in 40 ms blocks. Clients that ask for sound get it
+  (Windows App, mstsc, FreeRDP; rdesktop with -r sound). Tested with
+  FreeRDP; Windows App not yet.
+- Choices has a new option, "Mute this computer while a client listens"
+  (owner's choice: keep playing, with an option to mute). It takes effect
+  at once, also mid-session, and is kept in Choices:RDPServer.Settings
+  (`mute_local 1`). The command-line server has `-m` for the same.
+- xrdp.ini: `allow_channels=true` (needed for rdpsnd).
+- The module's interface is version 2 (a new entry, SET_MUTE, and the
+  option in the start options); the front end and module must match, as
+  !Run's RMEnsure 0.12 makes sure.
+- Second-opinion review: the handler is now removed if the module dies or
+  is killed with the server still running; a resize no longer starts the
+  sound over; sound carries on while the client is minimised; latency is
+  capped after a stall; a sample rate change is noticed; stricter
+  reassembly of the client's PDUs. All fixed.
+- The module is 0.12.
+
 ## RDPServer 0.2-test10 (14 October 2026)
 
 - Clients reconnect by themselves after the server restarts ([MS-RDPBCGR]

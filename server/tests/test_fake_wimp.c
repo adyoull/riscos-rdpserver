@@ -40,6 +40,8 @@ void server_shutdown (void) { shutdowns++; fake_status.listening = 0; }
 const char *server_start_error (void) { return start_fails ? start_error : NULL; }
 void server_disconnect (void) { disconnected++; fake_status.connected = 0; }
 int server_reload_logins (void) { reloaded++; return 0; }
+static int mute_calls, mute_set = -1;
+void server_set_mute (int on) { mute_calls++; mute_set = on; }
 void server_get_status (server_status *st) { *st = fake_status; st->login_set = have_login; }
 void server_set_message_hook (void (*h) (const char *)) { hook = h; }
 
@@ -76,12 +78,12 @@ static int windows, window_icons[8];
 static int *window_blocks[8];
 static int bar_block[9], bar_icon_calls;
 static int opened_window, open_calls, closed_window;
-static int redraws, last_redraw[4], bar_redraws;
+static int redraws, last_redraw[4], bar_redraws, opt_state[4];
 static const char *menu_ptr;
 static int menu_x, menu_y, menu_calls;
 static char reported[256];
 static int caret[6], processed_key = -1, pointer_buttons;
-static int store[8][22 + 8 * 10];
+static int store[8][22 + 8 * 12];
 
 static const _kernel_oserror *wimp (int swi, int r[10])
 {
@@ -115,6 +117,8 @@ static const _kernel_oserror *wimp (int swi, int r[10])
       return NULL;
     case Wimp_SetIconState:
       memcpy (last_redraw, b, sizeof last_redraw);
+      if (b[1] == 10)
+        memcpy (opt_state, b, sizeof opt_state);
       redraws++;
       if (b[0] == -2 && b[1] == 3)
         bar_redraws++;
@@ -220,8 +224,11 @@ int main (void)
   w.logins_file = "unused"; w.log_file = log;
 
   CHECK (wimp_read_port (settings, 3389) == 3389, "no settings file: port 3389");
-  CHECK (wimp_write_port (settings, 3390) == 0 && wimp_read_port (settings, 3389) == 3390,
+  CHECK (wimp_write_settings (settings, 3390, 1) == 0 && wimp_read_port (settings, 3389) == 3390,
          "the port is saved and read back");
+  CHECK (wimp_read_mute (settings, 0) == 1, "and the mute choice");
+  CHECK (wimp_write_settings (settings, 3390, 0) == 0 && wimp_read_mute (settings, 1) == 0,
+         "mute off is saved too");
   f = fopen (settings, "w"); fputs ("port 99999\n", f); fclose (f);
   CHECK (wimp_read_port (settings, 3389) == 3389, "a port out of range is ignored");
   f = fopen (settings, "w"); fputs ("port 5000\n", f); fclose (f);
@@ -234,7 +241,7 @@ int main (void)
   CHECK (strcmp ((const char *) bar_block[6], "!rdpserver") == 0 && bar_block[7] == 1,
          "the !rdpserver sprite, from the Wimp's pool");
   CHECK (((bar_block[5] >> 12) & 15) == 3, "the icon reports clicks");
-  CHECK (window_icons[1] == 10, "Choices has its ten icons");
+  CHECK (window_icons[1] == 11, "Choices has its eleven icons");
   CHECK (((window_blocks[1][22 + 8 * 1 + 4] >> 12) & 15) == 15
          && ((window_blocks[1][22 + 8 * 5 + 4] >> 12) & 15) == 15, "port and password are writable");
   CHECK (strncmp ((const char *) window_blocks[1][22 + 8 * 5 + 6], "D*", 2) == 0,
@@ -358,6 +365,37 @@ int main (void)
   CHECK (wimp_read_port (settings, 0) == 3391, "and is saved");
   wimp_tick ();
   CHECK (strstr (wimp_icon_text (0, 0), "port 3391") != NULL, "Status shows the new port");
+
+  /* Choices: mute this computer while a client listens. */
+  {
+    const int *mi = &window_blocks[1][22 + 8 * 10];
+    CHECK (window_icons[1] == 11 && (mi[4] & 0x3) == 0x3 && ((mi[4] >> 12) & 15) == 3
+           && strcmp ((const char *) mi[6], "Soptoff,opton") == 0
+           && strstr ((const char *) mi[5], "Mute this computer"),
+           "Choices has the mute option (text and optoff/opton sprites, reports clicks)");
+  }
+  CHECK (o.mute_local == 0, "mute starts off (no line in the settings)");
+  click (-2, 3, Button_Adjust);
+  CHECK (opt_state[0] == CHOICES && opt_state[2] == 0 && opt_state[3] == 0x200000,
+         "opening Choices shows it off");
+  click (CHOICES, 10, Button_Select);
+  CHECK (opt_state[2] == 0x200000, "a click ticks it");
+  CHECK (mute_calls == 0 && o.mute_local == 0, "not used until Save");
+  started = finished = 0;
+  CHECK (click (CHOICES, 9, Button_Select) == 0 && mute_calls == 1 && mute_set == 1
+         && o.mute_local == 1 && finished == 0 && started == 0,
+         "Save: the running server mutes from now (no restart)");
+  CHECK (wimp_read_mute (settings, 0) == 1 && wimp_read_port (settings, 0) == 3391,
+         "and it's saved with the port");
+  click (-2, 3, Button_Adjust);
+  CHECK (opt_state[2] == 0x200000, "Choices shows it on");
+  click (CHOICES, 10, Button_Select);
+  click (CHOICES, 8, Button_Select);
+  CHECK (mute_calls == 1 && o.mute_local == 1, "Cancel: unchanged");
+  click (-2, 3, Button_Adjust);
+  click (CHOICES, 10, Button_Select);
+  CHECK (click (CHOICES, 9, Button_Select) == 0 && mute_calls == 2 && mute_set == 0
+         && wimp_read_mute (settings, 1) == 0, "off again, saved");
 
   start_fails = 1;
   click (-2, 3, Button_Adjust);

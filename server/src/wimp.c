@@ -31,6 +31,7 @@
 #define IF_VCENTRE 0x10
 #define IF_FILLED 0x20
 #define IF_INDIRECTED 0x100
+#define IF_SELECTED 0x200000
 #define IF_SHADED 0x400000
 #define IF_CLICK (3 << 12)
 #define IF_WRITABLE (15 << 12)
@@ -42,18 +43,24 @@
 #define BUTTON (IF_TEXT | IF_BORDER | IF_HCENTRE | IF_VCENTRE | IF_FILLED \
                 | IF_INDIRECTED | IF_CLICK | IF_COLOURS (7, 1))
 
+/* An option icon: the optoff/opton sprites at the left, the text after
+   (text and sprite, vertically centred: PRM icon flags). Its state is
+   toggled here on a click (button type Click). */
+#define OPTION (IF_TEXT | IF_SPRITE | IF_VCENTRE | IF_INDIRECTED | IF_CLICK \
+                | IF_COLOURS (7, 1))
+
 /* Polling: no pointer entering/leaving or caret gained/lost events. */
 #define POLL_MASK ((1 << 4) | (1 << 5) | (1 << 11) | (1 << 12))
 
 enum { W_STATUS, W_CHOICES, W_INFO, W_COUNT };
-#define MAX_ICONS 10
+#define MAX_ICONS 11
 #define TEXT_SIZE 160
 
 /* Status window lines. */
 enum { ST_STATE, ST_LOGIN, ST_SENT, ST_HEADING, ST_MSG0, ST_LINES = ST_MSG0 + 6 };
 /* Choices icons. */
 enum { CH_PORT_L, CH_PORT, CH_USER_L, CH_USER, CH_PASS_L, CH_PASS, CH_NOTE,
-       CH_CLEAR, CH_CANCEL, CH_SAVE, CH_COUNT };
+       CH_CLEAR, CH_CANCEL, CH_SAVE, CH_MUTE, CH_COUNT };
 
 typedef struct
 {
@@ -77,6 +84,7 @@ static const wimp_setup *setup;
 static int task;
 static int running;            /* the server is listening */
 static char port_text[8];
+static int mute_shown;          /* the Choices option's state */
 static char bar_sprite[13] = "!rdpserver";
 static int bar_icon = -1, bar_on;
 static unsigned next_refresh;
@@ -190,13 +198,29 @@ wimp_read_port (const char *file, int def)
   return port;
 }
 
+/* "mute_local 0|1": mute this computer while a client listens. */
 int
-wimp_write_port (const char *file, int port)
+wimp_read_mute (const char *file, int def)
+{
+  FILE *f = fopen (file, "r");
+  char line[64];
+  int on = def, v;
+  if (!f)
+    return def;
+  while (fgets (line, sizeof line, f))
+    if (sscanf (line, "mute_local %d", &v) == 1 && (v == 0 || v == 1))
+      on = v;
+  fclose (f);
+  return on;
+}
+
+int
+wimp_write_settings (const char *file, int port, int mute_local)
 {
   FILE *f = fopen (file, "w");
   if (!f)
     return -1;
-  fprintf (f, "port %d\n", port);
+  fprintf (f, "port %d\nmute_local %d\n", port, mute_local != 0);
   return fclose (f) == 0 ? 0 : -1;
 }
 
@@ -277,11 +301,13 @@ create_choices (void)
     { 16, -180, 240, -132, LABEL, "Password", NULL, 0 },
     { 256, -180, 784, -132, WRITABLE, "", "D*;Ktar", 64 },
     { 16, -236, 784, -188, LABEL, "", NULL, 0 },
-    { 16, -316, 240, -248, BUTTON, "Clear login", "R5,3", 0 },
-    { 400, -316, 576, -248, BUTTON, "Cancel", "R5,3", 0 },
-    { 592, -316, 784, -248, BUTTON, "Save", "R6,3", 0 }
+    { 16, -372, 240, -304, BUTTON, "Clear login", "R5,3", 0 },
+    { 400, -372, 576, -304, BUTTON, "Cancel", "R5,3", 0 },
+    { 592, -372, 784, -304, BUTTON, "Save", "R6,3", 0 },
+    { 16, -292, 784, -244, OPTION, "Mute this computer while a client listens",
+      "Soptoff,opton", 0 }
   };
-  return create_window (W_CHOICES, "RDPServer choices", 400, 800, 800, 332,
+  return create_window (W_CHOICES, "RDPServer choices", 400, 800, 800, 388,
                         WF_CLOSE, ic, CH_COUNT);
 }
 
@@ -377,11 +403,25 @@ open_window (int w)
   fail (_swix (Wimp_OpenWindow, _IN (1), b));
 }
 
+/* Shows the option on or off. */
+static void
+show_mute (int on)
+{
+  int b[4];
+  mute_shown = on != 0;
+  if (win[W_CHOICES].handle == -1)
+    return;
+  b[0] = win[W_CHOICES].handle; b[1] = CH_MUTE;
+  b[2] = mute_shown ? IF_SELECTED : 0; b[3] = IF_SELECTED;   /* EOR, clear */
+  _swix (Wimp_SetIconState, _IN (1), b);
+}
+
 static void
 fill_choices (void)
 {
   auth_db db;
   set_text (W_CHOICES, CH_PORT, port_text);
+  show_mute (setup->opt->mute_local);
   if (auth_load (setup->logins_file, &db) == 0 && db.count > 0)
     set_text (W_CHOICES, CH_USER, db.login[0].name);
   else
@@ -475,10 +515,22 @@ save_choices (void)
       message ("login saved: clients must now log in");
     }
   forget_password ();
+  if (mute_shown != setup->opt->mute_local)
+    {
+      setup->opt->mute_local = mute_shown;
+      if (running)
+        server_set_mute (mute_shown);
+      message (mute_shown ? "this computer is muted while a client listens"
+                          : "this computer plays sound while a client listens");
+      if (p == atoi (port_text) && running
+          && wimp_write_settings (setup->settings_file, (int) p, mute_shown) != 0)
+        wimp_report ("The choice couldn't be saved in Choices: it's used until "
+                     "RDPServer quits.");
+    }
   /* A new port, or the same one again after it couldn't be used. */
   if (p != atoi (port_text) || !running)
     {
-      if (wimp_write_port (setup->settings_file, (int) p) != 0)
+      if (wimp_write_settings (setup->settings_file, (int) p, setup->opt->mute_local) != 0)
         wimp_report ("The port couldn't be saved in Choices: it's used until "
                      "RDPServer quits.");
       if (running)
@@ -579,6 +631,8 @@ wimp_event (int reason, int *b)
             }
           else if (b[4] == CH_CLEAR)
             clear_login ();
+          else if (b[4] == CH_MUTE)
+            show_mute (!mute_shown);
         }
       break;
     case Key_Pressed:
@@ -660,6 +714,8 @@ wimp_init (const wimp_setup *w)
   memset (ring, 0, sizeof ring);
   snprintf (bar_sprite, sizeof bar_sprite, "!rdpserver");
   snprintf (port_text, sizeof port_text, "%d", wimp_read_port (w->settings_file, 3389));
+  w->opt->mute_local = wimp_read_mute (w->settings_file, 0);
+  mute_shown = w->opt->mute_local;
   log_out = w->log_file ? fopen (w->log_file, "w") : NULL;
   server_set_message_hook (message);
 

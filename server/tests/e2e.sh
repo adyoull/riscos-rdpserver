@@ -37,7 +37,7 @@ sleep 1
 # Clients must log in as test / x (the e2e clients do).
 $SRV -setlogin test x >"$OUT/setlogin.log" 2>&1 || { bad "-setlogin failed"; cat "$OUT/setlogin.log"; exit 1; }
 # -g 2: a pause after each step, as on the desktop (Wimp_PollIdle).
-$SRV -p "$PORT" -t 400 -g 2 -v >"$OUT/server.log" 2>&1 & SPID=$!
+$SRV -p "$PORT" -t 400 -g 2 -v -m >"$OUT/server.log" 2>&1 & SPID=$!
 trap 'kill $SPID $XPID 2>/dev/null' EXIT
 # The first run makes the key.
 for i in $(seq 1 60); do grep -q listening "$OUT/server.log" && break; sleep 1; done
@@ -203,10 +203,37 @@ grep -q "the client's desktop is now 640 x 480" "$OUT/server.log" && ok "and bac
 kill $CPID 2>/dev/null; wait $CPID 2>/dev/null
 for i in $(seq 1 10); do [ "$(grep -c "client gone" "$OUT/server.log")" -gt "$before_gone" ] && break; sleep 1; done
 
+# Sound (FreeRDP's fake output): the client joins rdpsnd, takes our
+# format, and confirms the blocks it's sent. The server was started with -m:
+# this computer is muted while the client listens, and unmuted after.
+: >"$OUT/input.log"
+before_gone=$(grep -c "client gone" "$OUT/server.log")
+xfreerdp3 /v:localhost:$PORT /u:test /p:x /sec:rdp /cert:ignore /bpp:32 /sound:sys:fake >"$OUT/freerdp-sound.log" 2>&1 & CPID=$!
+for i in $(seq 1 30); do [ "$(grep -c "client up" "$OUT/server.log")" -ge 11 ] && break; sleep 1; done
+sleep 5
+kill $CPID 2>/dev/null; wait $CPID 2>/dev/null
+for i in $(seq 1 10); do [ "$(grep -c "client gone" "$OUT/server.log")" -gt "$before_gone" ] && break; sleep 1; done
+grep -q "sound: to the client, 48000 Hz 16-bit stereo" "$OUT/server.log" \
+  && ok "sound: the client takes 48 kHz 16-bit stereo" || bad "sound: no format agreed: $(grep 'sound' "$OUT/server.log" | tail -2)"
+line=$(grep "sound: [0-9]* blocks sent" "$OUT/server.log" | tail -1)
+sent=$(echo "$line" | sed -n 's/.*sound: \([0-9]*\) blocks sent, \([0-9]*\) confirmed.*/\1/p')
+conf=$(echo "$line" | sed -n 's/.*sound: \([0-9]*\) blocks sent, \([0-9]*\) confirmed.*/\2/p')
+# 5 s of 40 ms blocks: about 125; the client confirms nearly all of them
+[ "${sent:-0}" -ge 60 ] && [ "${conf:-0}" -ge $((sent - 10)) ] && [ "${conf:-0}" -le "${sent:-0}" ] \
+  && ok "sound: $sent blocks sent, $conf confirmed" || bad "sound: '$line'"
+grep -q "^sound mute 1$" "$OUT/input.log" && [ "$(grep '^sound mute' "$OUT/input.log" | tail -1)" = "sound mute 0" ] \
+  && ok "this computer muted while the client listened (-m), unmuted after" || bad "mute: $(grep '^sound mute' "$OUT/input.log" | tr '\n' ' ')"
+# rdesktop (no -r sound) joins rdpsnd but has no output: no sound, and
+# (-v) said so; FreeRDP plays sound by default.
+[ "$(grep -c "sound: the client has no sound output" "$OUT/server.log")" -eq 5 ] \
+  && ok "no sound for the clients without an output (rdesktop)" || bad "no-output clients: $(grep -c 'no sound output' "$OUT/server.log")"
+[ "$(grep -c "sound: [0-9]* blocks sent" "$OUT/server.log")" -eq "$(grep -c "sound: to the client" "$OUT/server.log")" ] \
+  && ok "one sound summary per session that had sound" || bad "sound summaries: $(grep -c 'blocks sent' "$OUT/server.log") for $(grep -c 'sound: to the client' "$OUT/server.log") sessions"
+
 kill -INT $SPID; wait $SPID; status=$?
 [ $status -ne 135 ] && [ $status -ne 132 ] && ok "no alignment or VFPv4 trap (exit $status)" || bad "trapped: exit $status"
 grep -q "stopped" "$OUT/server.log" && ok "server stopped cleanly" || bad "server didn't stop cleanly"
 n=$(grep -c "client up" "$OUT/server.log")
-[ "$n" -eq 10 ] && ok "10 sessions" || bad "$n sessions came up, not 10"
+[ "$n" -eq 11 ] && ok "11 sessions" || bad "$n sessions came up, not 11"
 echo "e2e: $fails failed"
 [ $fails -eq 0 ]

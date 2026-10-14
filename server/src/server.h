@@ -18,6 +18,7 @@ typedef struct
   const char *log_file;      /* libxrdp's messages here, not the console */
   unsigned step_gap_cs;      /* tests: server_step(0) then a pause this long,
                                 as the desktop version's poll loop does */
+  int mute_local;            /* silence this computer while a client listens */
 } server_options;
 
 typedef struct
@@ -46,6 +47,8 @@ void server_disconnect (void);
 int server_client_socket (void);
 /* Reads the logins file again (after Choices changed it). 0 = done. */
 int server_reload_logins (void);
+/* Mute this computer while a client listens: on or off, from now. */
+void server_set_mute (int on);
 void server_get_status (server_status *st);
 void server_set_message_hook (void (*hook) (const char *line));
 

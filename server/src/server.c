@@ -29,6 +29,7 @@
 #include "pixels.h"
 #include "capture.h"
 #include "keymap.h"
+#include "sound.h"
 #include "input.h"
 #include "auth.h"
 #include "server.h"
@@ -65,6 +66,8 @@ typedef struct
   unsigned last_step_end, gap_max;  /* time between steps: other programs */
   char client_desc[64];            /* "192.168.0.58:58303" */
   char client_user[64];
+  rdps_sound snd;                  /* sound to the client (sound.c) */
+  int mute_local;                  /* from the options; Choices can change it */
   int running;
 } server;
 
@@ -330,6 +333,10 @@ callback (intptr_t id, int msg, intptr_t param1, intptr_t param2,
           s->palette_due = s->client_bpp == 8;
         }
       break;
+    case 0x5555:   /* channel data: MAKELONG (channel id, flags), size, data, total */
+      sound_channel_data (&s->snd, (int) (param1 & 0xffff), (int) ((param1 >> 16) & 0xffff),
+                          (const void *) param3, (int) param2, (int) param4);
+      break;
     case 0x4444:   /* the client asks for a rectangle to be redrawn */
       if (s->cap.frame)
         cap_mark (&s->cap, (int) param1, (int) param2, (int) param3, (int) param4);
@@ -345,6 +352,7 @@ callback (intptr_t id, int msg, intptr_t param1, intptr_t param2,
 static void
 session_end (server *s, const char *why)
 {
+  sound_stop (&s->snd, s->session != NULL);
   if (s->session)
     {
       libxrdp_disconnect (s->session);
@@ -531,6 +539,7 @@ session_up (server *s)
   cap_mark_all (&s->cap);
   copy_text (s->client_user, sizeof s->client_user, ci->username);
   arc_send (s, ci);
+  sound_start (&s->snd, s->session, s->mute_local, s->opt->verbose, say);
   s->last_activity = plat_time_cs ();
   say ("client up: %d x %d, %d bpp, user \"%s\"", s->scr.width, s->scr.height,
        s->client_bpp, ci->username);
@@ -731,7 +740,9 @@ server_start (const server_options *o)
   server *s = &srv;
 
   memset (s, 0, sizeof *s);
+  s->snd.chan = -1;
   s->opt = o;
+  s->mute_local = o->mute_local;
   inq_init (&s->input);
   s->sink.move = sink_move;
   s->sink.key = sink_key;
@@ -1036,6 +1047,11 @@ step (unsigned max_wait_cs)
     }
 
   now = plat_time_cs ();
+  /* Sound first: it goes on while the client is minimised (Suppress
+     Output), not while it's reactivating after a resize. */
+  if (s->was_up && s->session && s->trans && s->trans->wait_s == NULL
+      && !s->resize_deadline)
+    sound_step (&s->snd);
   /* While the client hasn't taken what we sent, don't send more: the
      changes wait as dirty tiles, so a slow link gets fewer, later frames
      rather than an ever-growing queue. */
@@ -1113,7 +1129,6 @@ step (unsigned max_wait_cs)
         s->next_scan = now + (gap ? gap : 1);
       }
     }
-
   if (s->input.count > 0)
     return 1;
   if (s->trans && s->trans->wait_s != NULL)
@@ -1200,6 +1215,18 @@ server_reload_logins (void)
   return 0;
 }
 
+/* Choices changed "mute this computer while a client listens": now, if
+   sound is going to a client. */
+void
+server_set_mute (int on)
+{
+  server *s = &srv;
+  s->mute_local = on != 0;
+  s->snd.mute_local = s->mute_local;
+  if (s->snd.stage == 3)
+    plat_sound_mute (s->mute_local);
+}
+
 void
 server_finish (void)
 {
@@ -1227,6 +1254,7 @@ server_abandon (void)
 {
   server *s = &srv;
   release_all (s);
+  sound_stop (&s->snd, 0);         /* the handler out, this computer unmuted */
   server_arc_connection_ended ();
   cap_free (&s->cap);
   free (s->tilebuf);

@@ -39,8 +39,8 @@ module_base:
 @ &34: the front end's table (modapi.h)
 table:
         .word   0x73504452                      @ "RDPs"
-        .word   1                               @ interface version
-        .word   9                               @ entries
+        .word   2                               @ interface version (2: SET_MUTE, mute_local)
+        .word   10                              @ entries
         .word   e_attach - module_base
         .word   e_detach - module_base
         .word   e_set_file - module_base
@@ -50,6 +50,7 @@ table:
         .word   e_reload - module_base
         .word   e_status - module_base
         .word   e_messages - module_base
+        .word   e_set_mute - module_base
         .if     table - module_base - 0x34
         .error  "the table must follow the module header (&34)"
         .endif
@@ -66,7 +67,7 @@ bss_start:      .word   0
 bss_end:        .word   0
 
 title:  .asciz  "RDPServer"
-help:   .asciz  "RDPServer\t0.11 (14 Oct 2026) RDP server (the !RDPServer front end runs it)"
+help:   .asciz  "RDPServer\t0.12 (14 Oct 2026) RDP server (the !RDPServer front end runs it)"
         .balign 4
 flags:  .word   1                               @ 32-bit compatible
 
@@ -225,6 +226,57 @@ errorbox_open_addr:
         ENTRY   e_reload, mod_reload_logins
         ENTRY   e_status, mod_status
         ENTRY   e_messages, mod_messages
+        ENTRY   e_set_mute, mod_set_mute
+
+@ --- the SharedSound process handler (sndcap.c) ---------------------------
+@ SharedSound calls it after all other handlers, on a callback, with the
+@ mixed buffer (PRM SharedSound_InstallHandler): R0 = rdps_snd (the
+@ parameter), R1 = the buffer, R2 = its end, R3 = flags (bit 0: the buffer
+@ has data), R4 = the sample frequency. It copies the buffer into the ring
+@ (zeros if it has no data yet), then silences the buffer if rdps_snd says
+@ mute. R3 comes back with bit 0 set (SharedSound needs data written).
+        .equ    S_BASE, 0
+        .equ    S_MASK, 4
+        .equ    S_WR, 8
+        .equ    S_RATE, 12
+        .equ    S_FLAGS, 16
+        .equ    S_MUTE, 20
+        .text
+        .global rdps_snd_handler
+rdps_snd_handler:
+        stmfd   sp!, {r0-r2, r4-r9, lr}
+        str     r4, [r0, #S_RATE]
+        str     r3, [r0, #S_FLAGS]
+        tst     r3, #1
+        bne     1f
+        mov     r9, #0                  @ no data in it yet: make it silence
+        mov     r8, r1
+0:      cmp     r8, r2
+        strlo   r9, [r8], #4
+        blo     0b
+        orr     r3, r3, #1
+1:      ldr     r5, [r0, #S_BASE]
+        cmp     r5, #0
+        beq     3f
+        ldr     r6, [r0, #S_MASK]
+        ldr     r7, [r0, #S_WR]
+        mov     r8, r1
+2:      cmp     r8, r2
+        bhs     4f
+        ldr     r9, [r8], #4
+        and     lr, r7, r6
+        str     r9, [r5, lr]
+        add     r7, r7, #4
+        b       2b
+4:      str     r7, [r0, #S_WR]
+        ldr     r9, [r0, #S_MUTE]
+        cmp     r9, #0
+        beq     3f
+        mov     r9, #0
+5:      cmp     r1, r2
+        strlo   r9, [r1], #4
+        blo     5b
+3:      ldmfd   sp!, {r0-r2, r4-r9, pc}
 
 @ --- _kernel_oserror *rdps_swi (int swi, int *r) ---------------------------
         .text

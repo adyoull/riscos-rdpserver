@@ -17,7 +17,7 @@
 
 #define RDPS_MOD_TITLE "RDPServer"
 #define RDPS_MOD_MAGIC 0x73504452u        /* "RDPs" */
-#define RDPS_MOD_INTERFACE 1
+#define RDPS_MOD_INTERFACE 2
 #define RDPS_MOD_TABLE 0x34
 
 /* The entries, in the table's order. */
@@ -38,6 +38,8 @@ enum
                              lines after *seq, each "<tag> <text>\n" (tag s:
                              the server's, x: libxrdp's log); returns the
                              bytes written, updates *seq */
+  RDPS_MOD_SET_MUTE,      /* int (int on): mute this computer while a client
+                             listens, from now (0.2-test11) */
   RDPS_MOD_ENTRIES
 };
 
@@ -58,6 +60,7 @@ typedef struct
   unsigned interval_cs, idle_interval_cs, handshake_cs;
   int rows_per_scan;
   int verbose;
+  int mute_local;           /* silence this computer while a client listens */
 } rdps_mod_options;
 
 typedef struct

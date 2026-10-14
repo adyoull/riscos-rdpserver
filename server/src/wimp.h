@@ -55,9 +55,11 @@ void wimp_close (void);
 /* Shows an error in a box. */
 void wimp_report (const char *text);
 
-/* The settings file: "port N" lines. Returns the port read, or def. */
+/* The settings file: "port N" and "mute_local 0|1" lines. The readers
+   return what was read, or def. */
 int wimp_read_port (const char *file, int def);
-int wimp_write_port (const char *file, int port);
+int wimp_read_mute (const char *file, int def);
+int wimp_write_settings (const char *file, int port, int mute_local);
 
 /* All of it: wimp_init, the poll loop, wimp_close. Returns the exit
    status. */

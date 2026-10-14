@@ -38,6 +38,7 @@ unsigned rdps_thread_wake_time (void);
 int rdps_cmd_start (const server_options *o);   /* 0, or 1: see the messages */
 void rdps_cmd_stop (void);
 int rdps_cmd_reload_logins (void);              /* 0 or -1 */
+int rdps_cmd_set_mute (int on);                 /* 0 or -1 */
 
 /* Drops the client at once, whatever it's doing (also mid-handshake):
    the socket is shut down here, so a wait in the thread ends, and the

@@ -347,6 +347,7 @@ rdps_fatal (const char *why)
 {
   rdps_console_line ('s', why);
   m.dead = 1;
+  plat_sound_stop ();              /* SharedSound mustn't call into a dead module */
   rdps_close_all_sockets ();
   plat_click_finish ();
   plat_set_clients (0);
@@ -435,6 +436,7 @@ mod_start (const rdps_mod_options *o)
   m.opt.handshake_cs = m.mopt.handshake_cs;
   m.opt.rows_per_scan = m.mopt.rows_per_scan;
   m.opt.verbose = m.mopt.verbose;
+  m.opt.mute_local = m.mopt.mute_local;
   m.opt.log_file = NULL;               /* libxrdp's log: to the messages */
   {
     /* RDPServer$ThreadMode SYS: the thread in SYS mode, for comparing
@@ -497,6 +499,19 @@ mod_reload_logins (void)
   if (!take ())
     return -1;
   r = rdps_cmd_reload_logins ();
+  give ();
+  return r;
+}
+
+int
+mod_set_mute (int on)
+{
+  int r;
+  m.mopt.mute_local = on != 0;
+  m.opt.mute_local = on != 0;       /* for a restart */
+  if (!take ())
+    return -1;
+  r = rdps_cmd_set_mute (on);
   give ();
   return r;
 }
@@ -617,6 +632,7 @@ mod_final (int fatal)
       give ();
     }
   remove_handlers ();
+  plat_sound_stop ();              /* (the server may not have stopped) */
   plat_click_finish ();
   rdps_close_all_sockets ();
   plat_set_clients (0);

@@ -16,6 +16,7 @@ commands written to OUTDIR/ctl (one per line, read as they appear):
               then the box goes, Service_WimpReportError 0
   mode WxH    a pretend mode change (new size, the screen moves)
   disconnect  the front end's Disconnect (drops the client at once)
+  mute N      Choices' "mute this computer while a client listens" (0/1)
   stop        stop and exit
 
 Copyright (c) 2026 Andrew Youll. MIT licence (see LICENSE).
@@ -28,7 +29,7 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from modemu import RiscOS, RMA, SW, SH, Fatal  # noqa: E402
 
-ATTACH, DETACH, SET_FILE, START, STOP, DISCONNECT, RELOAD, STATUS, MESSAGES = range(9)
+ATTACH, DETACH, SET_FILE, START, STOP, DISCONNECT, RELOAD, STATUS, MESSAGES, SET_MUTE = range(10)
 MOD, KEYS, PORT, OUT = sys.argv[1], sys.argv[2], int(sys.argv[3]), sys.argv[4]
 SECONDS = float(sys.argv[5]) if len(sys.argv) > 5 else 600
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -66,8 +67,8 @@ set_file(INI_PATH, open(os.path.join(HERE, "..", "app", "!RDPServer", "xrdp.ini"
 set_file(KEYS_PATH, open(os.path.join(KEYS, "rsakeys.ini"), "rb").read())
 logins = os.path.join(KEYS, "logins")
 set_file(LOGINS_PATH, open(logins, "rb").read() if os.path.exists(logins) else b"")
-opts = struct.pack("<8s64s256s256sIIIii", str(PORT).encode(), b"", INI_PATH, LOGINS_PATH,
-                   10, 25, 3000, 128, 1)
+opts = struct.pack("<8s64s256s256sIIIiii", str(PORT).encode(), b"", INI_PATH, LOGINS_PATH,
+                   10, 25, 3000, 128, 1, int(os.environ.get("EMU_MUTE", "0")))
 seq = [0]
 
 
@@ -100,6 +101,8 @@ keys_seen = 0
 mouse_seen = 0
 wheel_seen = 0
 clients = None
+snd_handlers = 0
+snd_mark = (0, 0)
 box_open_at = None
 slowest = 0.0
 slowest_in_box = 0.0
@@ -138,6 +141,14 @@ try:
             inp.write("wheel %d %d\n" % (dz if dz < 0x80000000 else dz - (1 << 32),
                                          dw if dw < 0x80000000 else dw - (1 << 32)))
         wheel_seen = len(m.wheel)
+        if len(m.snd_handlers) != snd_handlers:
+            snd_handlers = len(m.snd_handlers)
+            say("sound handlers: %d (buffers so far %d, muted %d, no data %d)"
+                % (snd_handlers, m.snd_calls, m.snd_muted, m.snd_silent))
+            snd_mark = (m.snd_calls, m.snd_muted)
+        if snd_handlers and m.snd_calls - snd_mark[0] >= 50:
+            say("sound: %d buffers, %d muted" % (m.snd_calls - snd_mark[0], m.snd_muted - snd_mark[1]))
+            snd_mark = (m.snd_calls, m.snd_muted)
         c = m.vars.get("RDPServer$Clients")
         if c != clients and c is not None:
             inp.write("clients %s\n" % c)
@@ -171,6 +182,8 @@ try:
                         st = status()
                         say("disconnect took %.0f ms; connecting %d, connected %d"
                             % ((time.monotonic() - t0) * 1000, st[1], st[2]))
+                    elif cmd.startswith("mute "):
+                        say("mute: %d" % m.entry(SET_MUTE, int(cmd.split()[1])))
                     elif cmd == "status":
                         st = status()
                         say("status: listening %d, connecting %d, connected %d" % st[:3])

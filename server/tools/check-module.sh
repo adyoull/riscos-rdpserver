@@ -24,7 +24,7 @@ h = struct.unpack_from('<13I', d, 0)
 ok = h[0] == 0 and 0 < h[1] < len(d) and 0 < h[2] < len(d) and h[4] < len(d)
 t = d[h[4]:d.index(b'\0', h[4])]
 magic, ver, n = struct.unpack_from('<3I', d, 0x34)
-ok = ok and t == b'RDPServer' and magic == 0x73504452 and ver == 1 and n == 9
+ok = ok and t == b'RDPServer' and magic == 0x73504452 and ver == 2 and n == 10
 if not ok:
     print("check-module: bad header", h, t, hex(magic), ver, n); sys.exit(1)
 PY

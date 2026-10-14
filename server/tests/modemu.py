@@ -71,7 +71,8 @@ SWI = dict(OS_Byte=0x06, OS_Word=0x07, OS_EnterOS=0x16, OS_Heap=0x1D, OS_Module=
            OS_ReadMonotonicTime=0x42, OS_AddCallBack=0x54, OS_RemoveCallBack=0x5F,
            OS_DynamicArea=0x66, OS_SynchroniseCodeAreas=0x6E, OS_CallASWIR12=0x71,
            OS_LeaveOS=0x7C, TaskManager_TaskNameFromHandle=0x42680,
-           CryptRandom_Block=0x51983)
+           CryptRandom_Block=0x51983, Sound_SampleRate=0x40146,
+           SharedSound_InstallHandler=0x4B440, SharedSound_RemoveHandler=0x4B441)
 SOCK = dict(Creat=0x41200, Bind=0x41201, Listen=0x41202, Connect=0x41204,
             Recv=0x41205, Send=0x41208, Shutdown=0x4120B, Setsockopt=0x4120C,
             Getsockopt=0x4120D, Close=0x41210, Select=0x41211, Ioctl=0x41212,
@@ -180,6 +181,15 @@ class RiscOS:
         self.errorbox = False
         self.swilog = []
         self.fatal = None
+        # SharedSound: handlers, and a pretend 48 kHz stream through them
+        self.snd_handlers = {}   # handle -> (addr, param, type)
+        self.snd_next = 1
+        self.snd_buf = None
+        self.snd_t0 = None
+        self.snd_frames = 0
+        self.snd_calls = 0
+        self.snd_muted = 0       # buffers the handler silenced
+        self.snd_silent = 0      # buffers without data the handler zeroed
         self.sw, self.sh, self.screen = SW, SH, SCREEN
         self.draw_screen()
         data = open(module_file, "rb").read()
@@ -341,6 +351,8 @@ class RiscOS:
         regs, cpsr = self.call(self.base + self.hdr[2], r=[0] * 10 + [fatal], r12=self.pw)
         if cpsr & VFLAG:
             return self.string(regs[0] + 4)
+        if self.snd_handlers:
+            raise Fatal("killed with a SharedSound handler still installed")
         return None
 
     def service(self, r0, r1, r2=0):
@@ -375,9 +387,58 @@ class RiscOS:
         if self.errorbox:
             self.bytev(0x81, 0, 0)
         else:
+            self.sound_due()
             while self.callbacks:
                 addr, ws = self.callbacks.pop(0)
                 self.call(addr, r12=ws)
+
+    # --- SharedSound ---
+    SND_FRAMES = 1024
+    def sound_due(self):
+        """SharedSound's process handlers, on a callback, for each 1024
+        frames (4 KB, 16-bit stereo) of 48 kHz time gone by: a triangle
+        wave, every 7th buffer with no data in it (flags bit 0 clear, the
+        buffer holding junk the handler must make silence)."""
+        if not self.snd_handlers:
+            self.snd_t0 = None
+            return
+        if self.snd_buf is None:
+            self.snd_buf = self.rma_claim(self.SND_FRAMES * 4)
+        now = time.monotonic()
+        if self.snd_t0 is None:
+            self.snd_t0, self.snd_frames = now, 0
+        due = int((now - self.snd_t0) * 48000)
+        if due - self.snd_frames > 24000:          # behind by half a second
+            self.snd_frames = due - self.SND_FRAMES
+        while self.snd_frames + self.SND_FRAMES <= due and self.snd_handlers:
+            n = self.SND_FRAMES
+            has_data = self.snd_calls % 7 != 6
+            if has_data:
+                v = [((self.snd_frames + i) % 109) for i in range(n)]
+                v = [(p * 400 - 11000) if p < 55 else ((109 - p) * 400 - 11000) for p in v]
+                data = struct.pack("<%dh" % (2 * n), *[x for y in v for x in (y, y)])
+            else:
+                data = b"\xa5" * (4 * n)
+            for h, (addr, param, typ) in sorted(self.snd_handlers.items()):
+                self.mu.mem_write(self.snd_buf, data)
+                regs = [param, self.snd_buf, self.snd_buf + 4 * n, 1 if has_data else 0,
+                        48000 * 1024, 0, 0, 0xFFFFFFFF, 0, 0x5A5A5A5A]
+                out, _ = self.call(addr, r=regs)
+                if not out[3] & 1:
+                    raise Fatal("sound handler left R3 bit 0 clear (no data)")
+                for i in (0, 1, 2, 4, 5, 6, 7, 8, 9):
+                    if out[i] != regs[i] & 0xFFFFFFFF:
+                        raise Fatal("sound handler changed R%d" % i)
+                after = bytes(self.mu.mem_read(self.snd_buf, 4 * n))
+                if after == bytes(4 * n):
+                    if has_data:
+                        self.snd_muted += 1
+                    else:
+                        self.snd_silent += 1
+                elif after != data or not has_data:
+                    raise Fatal("sound handler changed the sound without muting it")
+            self.snd_calls += 1
+            self.snd_frames += n
 
     # --- SWIs ---
     def _swi_hook(self, mu, intno, _):
@@ -589,6 +650,20 @@ class RiscOS:
             self.mu.mem_write(r[0], b"Task\0")
         elif n == SWI["CryptRandom_Block"]:
             self.mu.mem_write(r[0], os.urandom(r[1]))
+        elif n == SWI["Sound_SampleRate"]:
+            if r[0] != 1:
+                raise Fatal("Sound_SampleRate %d" % r[0])
+            r[1], r[2] = 1, 48000 * 1024
+        elif n == SWI["SharedSound_InstallHandler"]:
+            if r[2] & 1 and r[4] not in (0, 1, 2):
+                raise Fatal("SharedSound_InstallHandler type %d" % r[4])
+            self.snd_handlers[self.snd_next] = (r[0], r[1], r[4] if r[2] & 1 else 0)
+            r[0] = self.snd_next
+            self.snd_next += 1
+        elif n == SWI["SharedSound_RemoveHandler"]:
+            if r[0] not in self.snd_handlers:
+                return self.error(0x1E6, "no such sound handler")
+            del self.snd_handlers[r[0]]
         elif n == SWI["OS_GenerateError"]:
             raise Fatal("OS_GenerateError: " + self.string(r[0] + 4))
         elif (n & ~0x3F) == 0x41200:

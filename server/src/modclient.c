@@ -199,6 +199,7 @@ server_start (const server_options *o)
   mo.handshake_cs = o->handshake_cs;
   mo.rows_per_scan = o->rows_per_scan;
   mo.verbose = o->verbose;
+  mo.mute_local = o->mute_local;
   if (call (RDPS_MOD_START, (int) &mo, 0, 0) != 0)
     {
       server_step (0);   /* its messages say why */
@@ -264,6 +265,13 @@ server_reload_logins (void)
   if (give (opts->logins, 0) != 0)
     return -1;
   return call (RDPS_MOD_RELOAD_LOGINS, 0, 0, 0);
+}
+
+void
+server_set_mute (int on)
+{
+  if (table && attached)
+    call (RDPS_MOD_SET_MUTE, on, 0, 0);
 }
 
 void

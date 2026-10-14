@@ -1,4 +1,4 @@
-RDPServer 0.2-test10 (test build)
+RDPServer 0.2-test11 (test build)
 ================================
 
 Lets you use this RISC OS desktop from another computer with Remote
@@ -56,6 +56,23 @@ straight away). The password isn't stored, only a salted SHA-256 of it
 turned away for 3 seconds.
 
 Choices also sets the port. Changing it disconnects a connected client.
+
+Sound
+-----
+What this computer plays goes to the client too, if the client asks for
+sound (Windows App, Remote Desktop Connection and FreeRDP do by default;
+rdesktop only with -r sound). It's sent as it is, 16-bit stereo at the
+computer's own sample rate (about 1.5 Mbit/s at 48 kHz), so it suits a
+home network better than the internet. It reaches the client about a
+third of a second late.
+
+The computer goes on playing it too, unless you tick "Mute this computer
+while a client listens" in Choices: it's then silent while a client
+listens, and plays again when the client goes. The choice takes effect
+at once, also while a client is connected.
+
+If a program changes the sample rate while a client is listening, the
+sound to that client stops until it connects again.
 
 Connecting
 ----------
