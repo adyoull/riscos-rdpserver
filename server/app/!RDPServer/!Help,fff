@@ -1,4 +1,4 @@
-RDPServer 0.2-test8 (test build)
+RDPServer 0.2-test9 (test build)
 ================================
 
 Lets you use this RISC OS desktop from another computer with Remote
@@ -32,8 +32,10 @@ The server itself is a module (RDPSMod, which !Run loads and Quit
 removes), so it goes on working when the desktop doesn't multitask:
 while an error box is open, the client still sees the screen (the box
 included) and can click the box's buttons; a program that keeps the
-machine to itself doesn't stop it either, nor does stopping such a
-program with Alt-Break. It never holds the desktop up
+machine to itself doesn't stop it either. If such a program is stopped
+with Alt-Break while the server is in the middle of its turn, the server
+starts again by itself (the client has to connect again). It never
+holds the desktop up
 for more than a couple of centiseconds at a time, also while a client is
 connecting.
 

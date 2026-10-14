@@ -233,10 +233,8 @@ g_sck_accept (int sck)
   int s = accept (sck, (struct sockaddr *) &sa, &len);
   if (s >= 0)
     {
-      /* A big send buffer: in the module, the Internet module's own work
-         (taking in ACKs, sending what's queued) runs in callbacks, which
-         wait until the server's turn ends (it runs in SYS mode), so a turn
-         can only hand over what fits in the buffer. Tried smaller until
+      /* A big send buffer, so a turn can hand over a whole picture's
+         worth while the Internet module sends it on. Tried smaller until
          the stack takes it. */
       static const int sizes[] = { 256 * 1024, 128 * 1024, 64 * 1024 };
       size_t i;

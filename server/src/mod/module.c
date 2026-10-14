@@ -42,7 +42,7 @@ extern volatile int mod_errorbox_open;   /* read by the ByteV veneer */
 #define STACK_BYTES (512 * 1024)
 #define HEAP_MAX (48 * 1024 * 1024)
 #define TICKER_CS 1                       /* OS_CallEvery: every 2 cs */
-#define EXTRA_TURNS 4                     /* see drive(); RDPServer$ExtraTurns */
+#define EXTRA_TURNS 0                     /* see drive(); RDPServer$ExtraTurns */
 
 static struct
 {
@@ -141,9 +141,9 @@ mod_messages (unsigned *seq, char *buf, int size)
    it, the run that set it has gone: its frames were thrown away (a
    program was stopped while the thread ran in its time, and the stop
    unwound the SVC stack too) and the thread will never yield back to
-   it. Since the thread runs in SYS mode (0.2-test6), no callback should
-   come inside it any more; this is the safety net if something else
-   does that. */
+   it. A transient callback that stops the current task (Alt-Break on a
+   runaway program) can come inside the thread, which runs in USR mode:
+   then the server starts again. */
 static uintptr_t
 svc_sp (void)
 {
@@ -353,56 +353,6 @@ rdps_fatal (const char *why)
     }
 }
 
-/* --- a benchmark (with -v, once) ---------------------------------------------
-   0.2-test6 and test7 (thread in SYS mode) did the same work about three
-   times slower than test5 (USR mode): the RSA step 17 cs, not 5. The
-   same four loops are timed in the module's own context (an entry, SVC
-   mode) and inside the thread, to see what kind of work slows down. */
-static void
-bench (const char *where)
-{
-  volatile unsigned x = 1;
-  unsigned t0, t[4], i;
-  char line[160];
-  unsigned char *a, *b;
-
-  t0 = plat_time_cs ();
-  for (i = 0; i < 30000000; i++)
-    x = x * 1664525u + 1013904223u;
-  t[0] = plat_time_cs () - t0;
-
-  a = malloc (1 << 20);
-  b = malloc (1 << 20);
-  t0 = plat_time_cs ();
-  if (a && b)
-    for (i = 0; i < 32; i++)
-      memcpy (i & 1 ? a : b, i & 1 ? b : a, 1 << 20);
-  t[1] = plat_time_cs () - t0;
-  free (a);
-  free (b);
-
-  t0 = plat_time_cs ();
-  for (i = 0; i < 20000; i++)
-    (void) plat_time_cs ();               /* OS_ReadMonotonicTime */
-  t[2] = plat_time_cs () - t0;
-
-  t0 = plat_time_cs ();
-  for (i = 0; i < 5000; i++)
-    free (malloc (64 + (i & 63)));        /* OS_Heap */
-  t[3] = plat_time_cs () - t0;
-
-  rdps_snprintf_buf (line, sizeof line, "benchmark (%s): compute %u cs, memory %u cs, "
-                     "20000 SWIs %u cs, 5000 heap %u cs", where, t[0], t[1], t[2], t[3]);
-  rdps_console_line ('s', line);
-}
-
-static void
-bench_in_thread (void)
-{
-  extern int co_thread_mode;
-  bench (co_thread_mode == 0x10 ? "server thread, USR mode" : "server thread, SYS mode");
-}
-
 /* --- the front end's entries (modapi.h; SVC mode) ------------------------- */
 
 int
@@ -472,29 +422,26 @@ mod_start (const rdps_mod_options *o)
   m.opt.verbose = m.mopt.verbose;
   m.opt.log_file = NULL;               /* libxrdp's log: to the messages */
   {
-    /* RDPServer$ThreadMode USR: the old mode, for comparing only (other
-       programs' callbacks come inside the thread there: Alt-Break loses
-       it, and UnixLib's pthread switcher can take it over). */
+    /* RDPServer$ThreadMode SYS: the thread in SYS mode, for comparing
+       (0.2-test6 to test8's: no callbacks in its turn, so the Internet
+       module's work waits and sending is slow). */
     extern int co_thread_mode;
     char v[8];
     int len = -1;
-    co_thread_mode = 0x1F;
+    co_thread_mode = 0x10;
     if (_swix (OS_ReadVarVal, _INR (0, 4) | _OUT (2), "RDPServer$ThreadMode", v,
                (int) sizeof v - 1, 0, 3, &len) == NULL && len == 3
-        && (v[0] | 32) == 'u' && (v[1] | 32) == 's' && (v[2] | 32) == 'r')
+        && (v[0] | 32) == 's' && (v[1] | 32) == 'y' && (v[2] | 32) == 's')
       {
-        co_thread_mode = 0x10;
-        rdps_console_line ('s', "the server thread runs in USR mode "
+        co_thread_mode = 0x1F;
+        rdps_console_line ('s', "the server thread runs in SYS mode "
                            "(RDPServer$ThreadMode): for comparing only");
       }
   }
-  if (m.opt.verbose)
-    {
-      bench ("module, SVC mode");
-      rdps_thread_bench = bench_in_thread;
-    }
+
   {
-    /* RDPServer$ExtraTurns 0..8 (for comparing): see drive() */
+    /* RDPServer$ExtraTurns 0..8: see drive(). Off by default: with the
+       thread in USR mode the Internet module's work runs inside the turn. */
     char v[8];
     int len = -1;
     m.extra_max = EXTRA_TURNS;

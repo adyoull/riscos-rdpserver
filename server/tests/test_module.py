@@ -198,17 +198,19 @@ check(status(m)["login_set"] == 1, "a login is now needed")
 
 # --- 6b: a program stopped (Alt-Break) while the thread ran in its time ----
 # (owner, 14 Oct 2026: Folio ran away, Alt-Break stopped it, and the
-# server never ran again.) The kernel runs callbacks on a return to USR
-# mode; with the thread in USR mode, a callback that stops the current
-# task came inside the thread. In SYS mode none can.
+# server never ran again.) The kernel runs transient callbacks on a
+# return to USR mode, where the thread runs: one that stops the current
+# task comes inside the thread. The safety net starts the server again.
 messages(m)
 m.kill_armed = True
 run_for(m, 40)
 m.kill_armed = False
-check(m.killed_in_thread == 0, "no callback comes inside the server thread (it runs in SYS mode)")
+check(m.killed_in_thread == 1, "a task stop came inside the server thread (USR mode)")
+run_for(m, 60)
 msgs = messages(m)
-check("was lost" not in msgs, "and nothing was lost")
-check(status(m)["listening"] == 1, "still listening")
+check("the server was lost" in msgs and "listening on port %d" % port in msgs,
+      "the server was started again (%r)" % msgs[-200:])
+check(status(m)["listening"] == 1, "listening again")
 # The safety net: the thread thrown away in the middle of a SWI anyway.
 m.unwind_next = True
 run_for(m, 60)
@@ -246,23 +248,28 @@ check(m.entry(ATTACH, 0x1234) == 0 and m.entry(START, options(m, port)) == 0,
       "attached and started again by the front end")
 check("extra turns: 2" in messages(m), "RDPServer$ExtraTurns read at the start")
 del m.vars["RDPServer$ExtraTurns"]
-# RDPServer$ThreadMode USR (comparing only): the thread runs in USR mode
+# RDPServer$ThreadMode SYS (comparing): the thread runs in SYS mode,
+# where no callbacks come inside it
 m.entry(STOP)
-m.vars["RDPServer$ThreadMode"] = "USR"
-check(m.entry(START, options(m, port)) == 0 and "runs in USR mode" in messages(m),
-      "RDPServer$ThreadMode USR: started, and said so")
+m.vars["RDPServer$ThreadMode"] = "SYS"
+check(m.entry(START, options(m, port)) == 0 and "runs in SYS mode" in messages(m),
+      "RDPServer$ThreadMode SYS: started, and said so")
+m.kill_armed = True
+run_for(m, 40)
+m.kill_armed = False
+check(m.killed_in_thread == 1, "SYS mode: no task stop came inside the thread")
 try:
     c = socket.create_connection(("127.0.0.1", port), timeout=2)
     run_for(m, 60)
-    check(status(m)["connecting"] == 1, "USR mode: a client is taken on")
+    check(status(m)["connecting"] == 1, "SYS mode: a client is taken on")
     c.close()
     run_for(m, 20)
 except OSError as e:
-    check(False, "USR mode: the port takes connections (%s)" % e)
+    check(False, "SYS mode: the port takes connections (%s)" % e)
 m.entry(STOP)
 del m.vars["RDPServer$ThreadMode"]
-check(m.entry(START, options(m, port)) == 0 and "runs in USR mode" not in messages(m),
-      "and back in SYS mode")
+check(m.entry(START, options(m, port)) == 0 and "runs in SYS mode" not in messages(m),
+      "and back in USR mode")
 check(status(m)["listening"] == 1, "listening")
 
 # --- 7: stop, detach, finalise ----------------------------------------------

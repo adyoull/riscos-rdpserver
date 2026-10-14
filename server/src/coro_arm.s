@@ -1,29 +1,36 @@
 @ RDPServer: coro.h for RISC OS (the module). One coroutine, the server
-@ thread, which runs in SYS mode on its own stack.
+@ thread, which runs in USR mode on its own stack (SYS mode if
+@ co_thread_mode says so, for comparing).
 @
 @ Why not SVC mode: the module resumes the thread from SVC mode (its
 @ callback, its ByteV claimant, the front end's entries). In SVC mode with
 @ sp off the SVC stack, a SWI or an interrupt handled by a C module
 @ crashes it: C modules find their static data from the base of the SVC
 @ stack (sp rounded down to the megabyte). 0.2-test1 did that and aborted
-@ inside Internet (+&4A8) on the Pi. In SYS mode (privileged, but with
-@ the user sp and lr) the thread's SWIs and interrupts use the SVC stack,
-@ as any program's do.
+@ inside Internet (+&4A8) on the Pi. In USR (or SYS) mode the thread's
+@ SWIs and interrupts use the SVC stack, as any program's do.
 @
-@ Why not USR mode (0.2-test2 to test5): RISC OS runs transient callbacks
-@ when it returns to USR mode, so they came inside the thread, in the
-@ middle of its work - whoever's they were. The thread runs in whatever
-@ task is current; when that task is stopped (Alt-Break on a program
-@ that has run away, so most of the thread's time is in its turn), the
-@ stop came in the thread and the server was gone for good (owner, 14 Oct
-@ 2026, Folio). The kernel doesn't run callbacks on a return to SYS mode.
+@ Why USR, not SYS: on every return to USR mode the kernel runs transient
+@ callbacks, and the Internet module does its TCP work in them (taking
+@ in ACKs, sending what's queued). In SYS mode (0.2-test6 to test8) they
+@ waited until the server's turn ended, so a big picture went out at
+@ about one TCP round trip per 2 cs: the first desktop took 10 s to
+@ arrive, against "instantly" in USR mode (owner, 14 Oct 2026).
+@ Non-transient callbacks (a program's own CallBack handler, such as
+@ UnixLib's pthread switcher) only come when the SVC stack is empty
+@ (PRM, CallBack Handler), never inside the thread: the module's frames
+@ are on the SVC stack while it runs. The one risk left is a transient
+@ callback that stops the current task (Alt-Break on a runaway program)
+@ coming inside the thread: the module's safety net (module.c, take)
+@ notices the turn never came back and starts the server again.
 @
 @ co_resume (SVC mode): saves the SVC context, its CPSR, and the user
 @   registers sp and lr of whatever task is current (they must be put
-@   back), then goes to SYS mode, interrupts on, on the thread's stack.
-@ co_yield (SYS mode, in the thread): saves the thread's context, back to
-@   SVC mode as it was (CPSR), puts the user sp and lr back, and returns
-@   from co_resume.
+@   back), then goes to USR (or SYS) mode, interrupts on, on the thread's
+@   stack.
+@ co_yield (in the thread): saves the thread's context, back to SVC mode
+@   (OS_EnterOS from USR mode) as co_resume was (CPSR), puts the user sp
+@   and lr back, and returns from co_resume.
 @ co_reset: forgets the thread (the module's safety net, when a resume
 @   never came back).
 @ A context is r4-r11, lr and sp (AAPCS). No VFP: the module is built
@@ -60,8 +67,8 @@ co_state:
         .space  100
         .data
         .balign 4
-co_thread_mode:                 @ 0x1F SYS (normal), 0x10 USR (for comparing only)
-        .word   0x1F
+co_thread_mode:                 @ 0x10 USR (normal), 0x1F SYS (for comparing)
+        .word   0x10
         .text
 
 @ int co_start (void (*fn) (void *), void *arg, void *stack, size_t size)
@@ -86,7 +93,7 @@ co_start:
 1:      mvn     r0, #0
         bx      lr
 
-@ SYS mode: fn (arg); when fn returns, not alive, back to the resumer.
+@ USR (or SYS) mode: fn (arg); when fn returns, not alive, back to the resumer.
 trampoline:
         mov     r0, r5
         blx     r4
@@ -124,12 +131,12 @@ co_resume:
         ldr     r1, =co_thread_mode
         ldr     r1, [r1]
         and     r1, r1, #0x1F
-        orr     r0, r0, r1              @ SYS32 (or USR32), interrupts on
+        orr     r0, r0, r1              @ USR32 (or SYS32), interrupts on
         msr     cpsr_c, r0
         mov     sp, r2                  @ (the user sp now)
         bx      r3                      @ co_yield's return, or the trampoline
 
-@ void co_yield (void): SYS mode, inside the thread
+@ void co_yield (void): inside the thread (USR or SYS mode)
 co_yield:
         ldr     ip, =co_state
         ldr     r0, [ip, #INSIDE]
@@ -142,7 +149,7 @@ co_yield:
         str     r0, [ip, #INSIDE]
 back_to_svc:
         mrs     r0, cpsr
-        tst     r0, #0xF                @ USR mode (comparing only): privileged first
+        tst     r0, #0xF                @ USR mode: privileged first
         swieq   XOS_EnterOS
         ldr     ip, =co_state
         ldr     r0, [ip, #OUT_PSR]

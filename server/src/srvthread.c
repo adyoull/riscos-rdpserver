@@ -21,7 +21,6 @@ static int running;                 /* server_start succeeded */
 static unsigned wake;               /* when the thread next wants to run */
 static int ready;                   /* rdps_thread_init done */
 unsigned rdps_yielded_cs;
-void (*rdps_thread_bench) (void);
 
 static void
 body (void *arg)
@@ -38,12 +37,6 @@ body (void *arg)
       switch (cmd)
         {
         case CMD_START:
-          if (rdps_thread_bench)
-            {
-              void (*b) (void) = rdps_thread_bench;
-              rdps_thread_bench = NULL;
-              b ();               /* once: the same work, inside the thread */
-            }
           if (running)
             server_finish ();
           cmd_result = server_start (cmd_opt);

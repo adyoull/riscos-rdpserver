@@ -53,10 +53,6 @@ void rdps_wait_cs (unsigned cs);
    all: server_step's "longest step" leaves them out. */
 extern unsigned rdps_yielded_cs;
 
-/* If set, the thread calls it once at its next start, then clears it
-   (the module's benchmark: the same work inside and outside). */
-extern void (*rdps_thread_bench) (void);
-
 /* os_calls.c: the client's send buffer size (bytes, 0 if the default),
    and bytes sent to clients in all (the module looks for progress). */
 extern int rdps_sndbuf;

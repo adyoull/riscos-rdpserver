@@ -1,5 +1,28 @@
 # Changelog
 
+## RDPServer 0.2-test9 (14 October 2026)
+
+- Back to test5's speed: the first desktop appears at once again. The
+  server thread runs in USR mode again. test8's measurements (owner)
+  showed the processor equally fast in SVC, SYS and USR mode, but in SYS
+  mode (test6 to test8) the first desktop waited 10 s to go out (0 scans
+  in the first 10 s), against at once in USR mode. The Internet module does its TCP work in
+  transient callbacks, which the kernel runs on returns to USR mode, also
+  inside the server's turn; in SYS mode they waited until the turn
+  ended.
+- A program stopped with Alt-Break while the server is in the middle of
+  its turn can still throw the turn away (that was test5's problem): the
+  safety net from test6 now notices and starts the server again ("the
+  server was lost"), and the client connects again. UnixLib's pthread
+  switcher can't take the thread over: a program's own CallBack handler
+  only runs with the SVC stack empty (PRM), never inside the thread.
+- `RDPServer$ThreadMode SYS` gives test6's SYS mode, for comparing.
+  test8's benchmark is gone. The extra turns of test7 are off
+  (`RDPServer$ExtraTurns 1` to 8 turns them on); the bigger send buffer
+  stays.
+- The module is 0.10.
+
+
 ## RDPServer 0.2-test8 (14 October 2026)
 
 A test build to find out why the server's own work is slower since
