@@ -3,24 +3,25 @@
 An RDP server for RISC OS, so the RISC OS desktop can be used from the
 Remote Desktop clients built into Windows, macOS, iOS, Android and Linux.
 
-**Status: test builds (0.2-test1).** 0.1 connected from Windows App on a
-Pi 4 running RISC OS 5; tested on Linux with rdesktop and FreeRDP. What's
-here:
+**Status: release candidate (0.2-rc1).** Runs on a Raspberry Pi 4 with
+RISC OS 5, used from Windows App on a Mac; also tested from rdesktop and
+FreeRDP on Linux.
+What's here:
 
-- `server/`: **RDPServer 0.2-test1**, built on xrdp's libxrdp. The server
+- `server/`: **RDPServer 0.2-rc1**, built on xrdp's libxrdp. The server
   is a relocatable module (`src/mod`), so it keeps going while the desktop
-  doesn't multitask (a Wimp error box, a program holding the machine); a
-  desktop front end (icon bar icon, Status and Choices windows) runs it.
-  Standard RDP
-  Security only (RC4: TLS waits for AcornSSL to work as a server),
-  classic RDP bitmaps (interleaved RLE, 32 bpp planar) at 8, 15, 16, 24 and
-  32 bpp, changed 64x64 tiles only, mouse, scroll wheel and keyboard, a
-  user name and password set in Choices. One client at a time. For your
-  own network only.
+  doesn't multitask (a Wimp error box, a program holding the machine, or
+  one stopped with Alt-Break: the server restarts and clients reconnect
+  by themselves); a desktop front end (icon bar icon, Status and Choices
+  windows) runs it. Standard RDP Security only (RC4: TLS waits for
+  AcornSSL to work as a server), classic RDP bitmaps (interleaved RLE,
+  32 bpp planar) at 8, 15, 16, 24 and 32 bpp, changed 64x64 tiles only,
+  mouse, scroll wheel and keyboard, sound to the client (RDPSND, PCM),
+  a user name and password set in Choices. One client at a time (RISC OS
+  has one desktop and one user). **For
+  your own network only.** Video and 3D in a hardware overlay (Reel,
+  EGL/Mesa programs) show as a black window on the client.
 
-- `docs/DESIGN.md`: the plan: libxrdp (from xrdp) for the protocol,
-  AcornSSL for TLS, the screen read and compared in tiles, input through
-  KeyV and OS_Word 21, the VideoCore's H.264 encoder later.
 - `probe/`: **RDPSProbe 0.2**, a test program for a Raspberry Pi. It
   measures how fast the screen can be read and compared, and checks that
   the mouse and keyboard can be driven the way a remote client would.
@@ -35,7 +36,7 @@ link: tools/modlink.py).
 ```sh
 cd server
 tools/fetch.sh                                    # xrdp and Mbed TLS, patched
-make RCD_DIR=/path/to/riscos-crossdev             # build/RDPServer-0.2-test1.zip
+make RCD_DIR=/path/to/riscos-crossdev             # build/RDPServer-0.2-rc1.zip
 make RCD_DIR=/path/to/riscos-crossdev host qemu module check
 tests/e2e.sh                                      # real clients, Linux build
 RCD_DIR=/path/to/riscos-crossdev QEMU=1 tests/e2e.sh   # ARM build, alignment traps on

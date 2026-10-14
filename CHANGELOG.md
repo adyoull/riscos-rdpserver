@@ -1,5 +1,22 @@
 # Changelog
 
+## RDPServer 0.2-rc1 (14 October 2026)
+
+Release candidate: test13 with its documentation made ready for other
+people to try. The server and module are the same as test13 (module
+0.13), which played sound from a Pi 4 to Windows App on a Mac.
+
+- !Help: no longer a "test build"; the warning to keep it on your own
+  network stays, with "set a login first"; auto-reconnect is now seen
+  with Windows App; what isn't done yet lists the clipboard, file and
+  printer sharing, H.264, and video and 3D in hardware overlays (Reel,
+  EGL/Mesa programs), which show as a black window on the client; a new
+  "Reporting problems" section (which logs to send, and the GitHub
+  issues page).
+- One client at a time is described as what it is, not as something
+  still to do: RISC OS has one desktop and one user (owner).
+- README: brought up to date (it still described 0.2-test1).
+
 ## RDPServer 0.2-test13 (14 October 2026)
 
 - Sound now reaches the client from any player (owner: "no sound" with

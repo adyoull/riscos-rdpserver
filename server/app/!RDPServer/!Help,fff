@@ -1,14 +1,15 @@
-RDPServer 0.2-test13 (test build)
-================================
+RDPServer 0.2-rc1 (release candidate)
+=====================================
 
 Lets you use this RISC OS desktop from another computer with Remote
 Desktop: Windows' Remote Desktop Connection (mstsc), Microsoft's Windows
 App on macOS, iOS and Android, FreeRDP or Remmina on Linux, and
 !RDPClient on another RISC OS machine.
 
-THIS IS A TEST BUILD. Its connections use RDP's older built-in
-encryption (RC4), not TLS. Only run it on your own network, behind your
-router, and quit it when you've finished testing.
+FOR YOUR OWN NETWORK ONLY. Its connections use RDP's older built-in
+encryption (RC4), not TLS. Run it on your own network, behind your
+router; never make port 3389 reachable from the internet. Set a login
+(below) before you use it.
 
 Needs: SharedUnixLibrary, ARMEABISupport and CryptRandom (PackMan), and a
 desktop mode with thousands or millions of colours (16 or 32 bpp).
@@ -36,14 +37,18 @@ machine to itself doesn't stop it either. If such a program is stopped
 with Alt-Break while the server is in the middle of its turn, the server
 starts again by itself, and a client that supports automatic
 reconnection should connect again by itself within a few seconds,
-without asking for the password (seen with FreeRDP's /auto-reconnect
-and rdesktop; Windows App and Remote Desktop Connection support it too,
-not yet tried here). It never holds the desktop up
+without asking for the password (seen with Windows App, FreeRDP's
+/auto-reconnect and rdesktop). It never holds the desktop up
 for more than a couple of centiseconds at a time, also while a client is
 connecting.
 
 Disconnect (on the icon's menu) drops the client at once, even one that
 is still connecting.
+
+There is one client at a time, as RISC OS has one desktop and one user:
+while a client is connected, another is turned away (the Log says so).
+A client that connects but doesn't finish connecting within 30 seconds
+is dropped, so it can't keep others out.
 
 Setting a login
 ---------------
@@ -89,9 +94,10 @@ local USB mouse's wheel does. The keyboard works by key position, with
 RISC OS's keyboard layout. Keys go to whichever window has the input
 focus on RISC OS.
 
-Test builds write a log, Choices:RDPServer.Log (and libxrdp's own,
-XrdpLog): every mouse button and wheel event, and Shift, Ctrl and Alt.
-Other keys are logged without saying which, so nothing you type is kept.
+It writes a log, Choices:RDPServer.Log (and libxrdp's own, XrdpLog):
+connections, sound, every mouse button and wheel event, and Shift, Ctrl
+and Alt. Other keys are logged without saying which, so nothing you type
+is kept.
 A click goes to RISC OS when the client lets go of the button (or after
 a quarter of a second, if you hold it, or as soon as you drag); the
 button is then released 6 cs later by a ticker event, so double-clicks
@@ -102,22 +108,32 @@ What isn't done yet
 - TLS (needs AcornSSL to work as a server).
 - Only changed areas are sent, but there's no bitmap cache yet, and no
   quick handling of window moves and scrolling.
-- The clipboard, and sound on the client (planned).
+- The clipboard, and file or printer sharing.
+- H.264: video is sent as ordinary screen updates, so it uses a lot of
+  the network and isn't smooth at large sizes.
 - The pointer shape: the client shows its own arrow.
-- Video in a hardware overlay never reaches screen memory, so a client
-  can't see it. While a client is connected RDPServer sets EGL$Overlay
-  to "off", and Reel and EGL programs draw ordinarily instead (slower,
-  but seen); your own EGL$Overlay setting is put back when the client
-  goes. Programs that use VideoOverlay some other way still show a
-  black area. RDPServer$Clients is 1 while a client is connected.
+- Video and 3D shown in a hardware overlay (VideoOverlay, and EGL
+  programs such as Reel, ReelEGL and Mesa games) appear on the client as
+  a black window: the GPU draws overlays straight to the display, so they
+  never reach screen memory where RDPServer reads the picture. They still
+  show on this computer's own monitor. While a client is connected
+  RDPServer sets EGL$Overlay to "off" (and puts your own setting back
+  when the client goes) and RDPServer$Clients to 1, so programs can draw
+  the ordinary way instead; Reel and the EGL library don't do that yet.
 - Changing the screen mode while a client is connected resizes the
   client's desktop to the new mode; the client redraws its window as it
   does that, so it flashes once. A mode change at the same size (other
   colours, say) doesn't resize it, so doesn't flash. A client that
   can't be resized (it didn't say it could) is disconnected: connect
   again.
-- One client at a time. A client that connects but doesn't finish
-  connecting within 30 seconds is dropped.
+
+Reporting problems
+------------------
+Please say which client you used (and its version), what you did and
+what happened, and attach Choices:RDPServer.Log and XrdpLog from that
+run (they start afresh each time RDPServer starts). They hold no
+passwords or typed text.
+  https://github.com/adyoull/riscos-rdpserver/issues
 
 Command line
 ------------

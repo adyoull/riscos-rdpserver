@@ -161,7 +161,7 @@ main (int argc, char **argv)
     }
 #else
 
-  printf ("RDPServer " VERSION ": a test build. Standard RDP Security only "
+  printf ("RDPServer " VERSION ": a release candidate. Standard RDP Security only "
           "(RC4, no TLS): use it on your own network.\n");
 
   if (access (keys, R_OK) != 0)
