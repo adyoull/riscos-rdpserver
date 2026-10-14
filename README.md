@@ -14,7 +14,7 @@ What's here:
   one stopped with Alt-Break: the server restarts and clients reconnect
   by themselves); a desktop front end (icon bar icon, Status and Choices
   windows) runs it. Standard RDP Security only (RC4: TLS waits for
-  AcornSSL to work as a server), classic RDP bitmaps (interleaved RLE,
+  AcornSSL to work as a server or use mbedTLS directly), classic RDP bitmaps (interleaved RLE,
   32 bpp planar) at 8, 15, 16, 24 and 32 bpp, changed 64x64 tiles only,
   mouse, scroll wheel and keyboard, sound to the client (RDPSND, PCM),
   a user name and password set in Choices. One client at a time (RISC OS
