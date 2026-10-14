@@ -1,0 +1,72 @@
+diff -ruN a/common/xrdp_client_info.h b/common/xrdp_client_info.h
+--- a/common/xrdp_client_info.h	2026-10-13 16:33:03.297210411 +0100
++++ b/common/xrdp_client_info.h	2026-10-14 11:04:52.812366844 +0100
+@@ -254,6 +254,15 @@
+     enum client_resize_mode client_resize_mode;
+ 
+     int vmconnect; /* Used when used from inside Hyper-V */
++
++    /* RDPServer: [MS-RDPBCGR] auto-reconnect. The client's
++       ARC_CS_PRIVATE_PACKET from TS_EXTENDED_INFO_PACKET (present if
++       arc_present), and this connection's client random, which the
++       packet's SecurityVerifier is an HMAC of. */
++    int arc_present;
++    int arc_logon_id;
++    char arc_verifier[16];
++    char arc_client_random[32];
+ };
+ 
+ enum xrdp_encoder_flags
+diff -ruN a/libxrdp/xrdp_caps.c b/libxrdp/xrdp_caps.c
+--- a/libxrdp/xrdp_caps.c	2026-10-13 16:33:03.274096632 +0100
++++ b/libxrdp/xrdp_caps.c	2026-10-14 11:04:52.813247560 +0100
+@@ -1172,11 +1172,12 @@
+     out_uint16_le(s, 0); /* Compression types */
+     if (self->client_info.use_fast_path & 1)
+     {
+-        out_uint16_le(s, NO_BITMAP_COMPRESSION_HDR | FASTPATH_OUTPUT_SUPPORTED);
++        out_uint16_le(s, NO_BITMAP_COMPRESSION_HDR | FASTPATH_OUTPUT_SUPPORTED |
++                      AUTORECONNECT_SUPPORTED);
+     }
+     else
+     {
+-        out_uint16_le(s, NO_BITMAP_COMPRESSION_HDR);
++        out_uint16_le(s, NO_BITMAP_COMPRESSION_HDR | AUTORECONNECT_SUPPORTED);
+     }
+     out_uint16_le(s, 0); /* Update capability */
+     out_uint16_le(s, 0); /* Remote unshare capability */
+diff -ruN a/libxrdp/xrdp_sec.c b/libxrdp/xrdp_sec.c
+--- a/libxrdp/xrdp_sec.c	2026-10-13 16:33:03.304350312 +0100
++++ b/libxrdp/xrdp_sec.c	2026-10-14 11:04:52.814451597 +0100
+@@ -997,6 +997,31 @@
+         /* TS_EXTENDED_INFO_PACKET optional fields */
+         in_uint32_le(s, self->rdp_layer->client_info.rdp5_performanceflags);
+ 
++        /* RDPServer: cbAutoReconnectCookie (2), autoReconnectCookie: an
++           ARC_CS_PRIVATE_PACKET (28 bytes: cbLen, Version 1, LogonId,
++           SecurityVerifier[16]) when the client is reconnecting
++           automatically. The client random it's checked against is
++           this connection's (from the Security Exchange PDU). */
++        self->rdp_layer->client_info.arc_present = 0;
++        g_memcpy(self->rdp_layer->client_info.arc_client_random,
++                 self->client_random, 32);
++        if (s_check_rem(s, 2))
++        {
++            int cb_cookie;
++            in_uint16_le(s, cb_cookie);
++            if (cb_cookie == 28 && s_check_rem(s, 28))
++            {
++                int cb_len;
++                int version;
++                in_uint32_le(s, cb_len);
++                in_uint32_le(s, version);
++                in_uint32_le(s, self->rdp_layer->client_info.arc_logon_id);
++                in_uint8a(s, self->rdp_layer->client_info.arc_verifier, 16);
++                self->rdp_layer->client_info.arc_present =
++                    (cb_len == 28 && version == 1);
++            }
++        }
++
+         LOG_DEVEL(LOG_LEVEL_TRACE, "Received [MS-RDPBCGR] TS_EXTENDED_INFO_PACKET "
+                   "<Optional Fields> clientTimeZone (ignored), "
+                   "clientSessionId (ignored), performanceFlags 0x%8.8x, "

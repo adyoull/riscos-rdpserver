@@ -975,6 +975,14 @@ read (int fd, void *buf, size_t n)
 
 static int is_open_socket (int fd);
 
+/* For the module: is fd a socket the module opened and hasn't closed?
+   (Socket numbers are shared with other programs.) */
+int
+rdps_socket_is_ours (int fd)
+{
+  return is_open_socket (fd);
+}
+
 ssize_t
 write (int fd, const void *buf, size_t n)
 {

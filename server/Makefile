@@ -12,9 +12,10 @@ include $(RCD_DIR)/riscos.mk
 .DEFAULT_GOAL := all
 
 VERSION := 0.2
-TESTSUFFIX := -test9
+TESTSUFFIX := -test10
 B := build
 X := $(B)/xrdp
+XRDP_H = $(wildcard $(X)/common/*.h $(X)/libxrdp/*.h)
 M := $(B)/upstream/mbedtls
 MO := $(B)/module
 
@@ -43,11 +44,11 @@ RO_CFLAGS := $(RISCOS_CFLAGS) -ffile-prefix-map=$(CURDIR)=rdpserver $(INC)
 
 all: $(B)/RDPServer-$(VERSION)$(TESTSUFFIX).zip
 
-$(RO)/%.o: $(X)/libxrdp/%.c | $(RO)
+$(RO)/%.o: $(X)/libxrdp/%.c $(XRDP_H) | $(RO)
 	$(RO_CC) $(RO_CFLAGS) $(XRDP_FLAGS) -c $< -o $@
-$(RO)/%.o: $(X)/common/%.c | $(RO)
+$(RO)/%.o: $(X)/common/%.c $(XRDP_H) | $(RO)
 	$(RO_CC) $(RO_CFLAGS) $(XRDP_FLAGS) -c $< -o $@
-$(RO)/%.o: src/%.c src/*.h | $(RO)
+$(RO)/%.o: src/%.c src/*.h $(XRDP_H) | $(RO)
 	$(RO_CC) $(RO_CFLAGS) -Wall -Wextra -c $< -o $@
 $(RO)/%.o: src/%.s | $(RO)
 	$(RO_CC) $(RO_CFLAGS) -c $< -o $@
@@ -103,11 +104,11 @@ LIBGCC = $(shell $(RO_CC) -print-libgcc-file-name)
 module: $(MO)/RDPServer,ffa
 $(MO):
 	mkdir -p $(MO)/mbed
-$(MO)/%.o: $(X)/libxrdp/%.c | $(MO)
+$(MO)/%.o: $(X)/libxrdp/%.c $(XRDP_H) | $(MO)
 	$(RO_CC) $(MOD_CFLAGS) $(XRDP_FLAGS) -c $< -o $@
-$(MO)/%.o: $(X)/common/%.c | $(MO)
+$(MO)/%.o: $(X)/common/%.c $(XRDP_H) | $(MO)
 	$(RO_CC) $(MOD_CFLAGS) $(XRDP_FLAGS) -c $< -o $@
-$(MO)/%.o: src/%.c src/*.h | $(MO)
+$(MO)/%.o: src/%.c src/*.h $(XRDP_H) | $(MO)
 	$(RO_CC) $(MOD_CFLAGS) -Wall -Wextra -c $< -o $@
 $(MO)/libc.o: src/mod/libc.c src/mod/*.h | $(MO)
 	$(RO_CC) $(MOD_CFLAGS) -fno-builtin -fno-tree-loop-distribute-patterns -Wall -Wextra -c $< -o $@
@@ -136,11 +137,11 @@ HO_OBJ := $(patsubst %.c,$(HO)/%.o,$(notdir $(XRDP_SRC) $(OUR_SRC))) $(HO)/plat_
 HO_MBED := $(patsubst %.c,$(HO)/mbed/%.o,$(notdir $(MBED_SRC)))
 
 host: $(HO)/rdpserver
-$(HO)/%.o: $(X)/libxrdp/%.c | $(HO)
+$(HO)/%.o: $(X)/libxrdp/%.c $(XRDP_H) | $(HO)
 	$(HOST_CC) $(HOST_CFLAGS) $(XRDP_FLAGS) -c $< -o $@
-$(HO)/%.o: $(X)/common/%.c | $(HO)
+$(HO)/%.o: $(X)/common/%.c $(XRDP_H) | $(HO)
 	$(HOST_CC) $(HOST_CFLAGS) $(XRDP_FLAGS) -c $< -o $@
-$(HO)/%.o: src/%.c src/*.h | $(HO)
+$(HO)/%.o: src/%.c src/*.h $(XRDP_H) | $(HO)
 	$(HOST_CC) $(HOST_CFLAGS) -Wall -Wextra -c $< -o $@
 $(HO)/mbed/%.o: $(M)/library/%.c config/rdps_mbedtls_config.h | $(HO)
 	$(HOST_CC) $(HOST_CFLAGS) -w -c $< -o $@
@@ -158,11 +159,11 @@ QO_OBJ := $(patsubst %.c,$(QO)/%.o,$(notdir $(XRDP_SRC) $(OUR_SRC))) $(QO)/plat_
 QO_MBED := $(patsubst %.c,$(QO)/mbed/%.o,$(notdir $(MBED_SRC)))
 
 qemu: $(QO)/rdpserver
-$(QO)/%.o: $(X)/libxrdp/%.c | $(QO)
+$(QO)/%.o: $(X)/libxrdp/%.c $(XRDP_H) | $(QO)
 	$(LINUXARM_CC) $(QEMU_CFLAGS) $(XRDP_FLAGS) -c $< -o $@
-$(QO)/%.o: $(X)/common/%.c | $(QO)
+$(QO)/%.o: $(X)/common/%.c $(XRDP_H) | $(QO)
 	$(LINUXARM_CC) $(QEMU_CFLAGS) $(XRDP_FLAGS) -c $< -o $@
-$(QO)/%.o: src/%.c src/*.h | $(QO)
+$(QO)/%.o: src/%.c src/*.h $(XRDP_H) | $(QO)
 	$(LINUXARM_CC) $(QEMU_CFLAGS) -Wall -Wextra -c $< -o $@
 $(QO)/mbed/%.o: $(M)/library/%.c config/rdps_mbedtls_config.h | $(QO)
 	$(LINUXARM_CC) $(QEMU_CFLAGS) -w -c $< -o $@

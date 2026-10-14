@@ -195,11 +195,20 @@ rdps_cmd_disconnect (void)
      number could be given to another program's socket first). A wait in
      the thread then sees the socket readable, its read fails, and libxrdp
      gives up; dropping makes every libxrdp wait give up too. */
-  sck = server_client_socket ();
-  if (sck >= 0)
-    shutdown (sck, SHUT_RDWR);
+  /* The thread ends the session, saying goodbye (libxrdp's Disconnect
+     Provider Ultimatum: a deliberate disconnect, so the client doesn't
+     connect again by itself). dropping also ends any libxrdp wait it's
+     in. Only if that doesn't happen (a wait that doesn't look) is the
+     socket shut down, which ends any wait. */
   dropping = 1;
   run_until_done ();
+  if (dropping)
+    {
+      sck = server_client_socket ();
+      if (sck >= 0)
+        shutdown (sck, SHUT_RDWR);
+      run_until_done ();
+    }
 }
 
 #ifndef RDPS_MODULE

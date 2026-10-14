@@ -1,5 +1,37 @@
 # Changelog
 
+## RDPServer 0.2-test10 (14 October 2026)
+
+- Clients reconnect by themselves after the server restarts ([MS-RDPBCGR]
+  automatic reconnection; owner: "can we auto reconnect?"). Once a
+  client is up, the server gives it a cookie (a logon id and 16 random
+  bytes). When the safety net restarts the server, it now cuts the
+  client's connection with a reset instead of closing it, which clients
+  take for a broken connection. A client that supports automatic
+  reconnection (Windows App, mstsc, rdesktop, FreeRDP with
+  /auto-reconnect) then connects again, proving it has the cookie (an
+  HMAC-MD5 of the new connection's client random); that stands in for
+  the password, for the same user. Tested with FreeRDP; Windows App
+  not yet.
+- A cookie is only good within 2 minutes of its connection ending, is
+  replaced at each login, and is cancelled by Disconnect, by a change of
+  logins and by stopping the server.
+- Disconnect (the icon's menu) now ends the session properly
+  (libxrdp's Disconnect Provider Ultimatum), so the client knows it was
+  on purpose and doesn't reconnect: the socket used to be shut down
+  first, so the goodbye never went (rdesktop, which has cookies, came
+  straight back in the tests).
+- libxrdp patch 0004: the server's General Capability Set says
+  AUTORECONNECT_SUPPORTED, and the client's auto-reconnect cookie and
+  client random are kept in client_info.
+- Second-opinion review: cookie lifetime (now 2 minutes after the end),
+  SO_LINGER only on a socket the module still owns, constant-time
+  compare. All fixed.
+- The Makefile now rebuilds everything when xrdp's headers change (a
+  stale object crashed the emulated module).
+- The module is 0.11.
+
+
 ## RDPServer 0.2-test9 (14 October 2026)
 
 - Back to test5's speed: the first desktop appears at once again. The

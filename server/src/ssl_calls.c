@@ -255,6 +255,19 @@ ssl_des3_decrypt (void *des3, int length, const char *in_data, char *out_data)
   return des3_run (des3, length, in_data, out_data);
 }
 
+/* --- HMAC-MD5 (RDPServer: the auto-reconnect cookie's verifier) -------- */
+
+int
+rdps_hmac_md5 (const void *key, int key_len, const void *data, int data_len,
+               unsigned char out[16])
+{
+  const mbedtls_md_info_t *md = mbedtls_md_info_from_type (MBEDTLS_MD_MD5);
+  if (!md)
+    return -1;
+  return mbedtls_md_hmac (md, key, (size_t) key_len, data, (size_t) data_len,
+                          out) == 0 ? 0 : -1;
+}
+
 /* --- HMAC-SHA1 ------------------------------------------------------------ */
 
 void *

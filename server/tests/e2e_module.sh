@@ -96,6 +96,7 @@ wait_for gones $((g + 1)) 5 && ok "Disconnect: the client is dropped at once" ||
 grep -q "client gone (disconnected from this computer)" "$OUT/server.log" && ok "and the log says why" || bad "no reason logged"
 for i in $(seq 1 20); do kill -0 $CPID 2>/dev/null || break; sleep 0.5; done
 kill -0 $CPID 2>/dev/null && { bad "rdesktop still connected"; kill $CPID; } || ok "rdesktop saw the connection close"
+! grep -q 'auto-reconnect: "test" is back' "$OUT/server.log" && ok "and didn't connect again by itself (Disconnect is on purpose)" || bad "the client came back after Disconnect"
 wait $CPID 2>/dev/null
 grep -q "^clients 0$" "$OUT/input.log" && ok "RDPServer\$Clients back to 0" || bad "RDPServer\$Clients not cleared"
 grep -A1 "^clients 0$" "$OUT/input.log" | grep -q "^overlay (unset)$" && ok "EGL\$Overlay unset again, as it was" || bad "EGL\$Overlay not put back"
@@ -148,6 +149,30 @@ expect freerdp-resized 100,400 0,0,255 "blue"
 ctl "mode 640x480"
 for i in $(seq 1 30); do grep -q "desktop is now 640 x 480" "$OUT/server.log" && break; sleep 0.5; done
 grep -q "the client's desktop is now 640 x 480" "$OUT/server.log" && ok "and back" || bad "no resize back"
+kill $CPID 2>/dev/null; wait $CPID 2>/dev/null
+
+# --- 5b: auto-reconnect ----------------------------------------------------
+# The server thread thrown away (as when Alt-Break stops a program in the
+# middle of the server's turn): the module starts the server again and cuts
+# the connection; FreeRDP with /auto-reconnect connects again by itself,
+# with the auto-reconnect cookie the server gave it.
+sleep 2
+u=$(ups)
+backs () { grep -c 'auto-reconnect: "test" is back' "$OUT/server.log"; }
+losts () { grep -c "the server was lost" "$OUT/server.log"; }
+b=$(backs); l=$(losts)
+xfreerdp3 /v:localhost:$PORT /u:test /p:x /sec:rdp /cert:ignore /bpp:32 /auto-reconnect \
+  /auto-reconnect-max-retries:10 >"$OUT/freerdp-arc.log" 2>&1 & CPID=$!
+for i in $(seq 1 30); do [ "$(ups)" -gt "$u" ] && break; sleep 1; done
+sleep 2
+ctl unwind
+for i in $(seq 1 40); do [ "$(backs)" -gt "$b" ] && break; sleep 1; done
+[ "$(losts)" -gt "$l" ] && ok "the thread thrown away: the module started the server again" || bad "no restart after the thread was thrown away"
+[ "$(backs)" -gt "$b" ] && [ "$(ups)" -ge $((u + 2)) ] \
+  && ok "FreeRDP connected again by itself, with its auto-reconnect cookie" \
+  || bad "no auto-reconnect ($(tail -3 "$OUT/freerdp-arc.log" | tr '\n' ' '))"
+sleep 3; shot freerdp-arc
+expect freerdp-arc 100,400 0,0,255 "after reconnecting: blue"
 kill $CPID 2>/dev/null; wait $CPID 2>/dev/null
 
 # --- 6: a wrong password --------------------------------------------------

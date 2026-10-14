@@ -158,6 +158,8 @@ try:
                         box_open_at = time.monotonic()
                     elif cmd.startswith("sprite "):
                         m.redirect = int(cmd.split()[1])
+                    elif cmd == "unwind":
+                        m.unwind_next = True       # the thread thrown away (as by Alt-Break)
                     elif cmd == "bank":
                         m.swap_bank()
                     elif cmd.startswith("mode "):

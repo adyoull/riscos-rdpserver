@@ -665,6 +665,11 @@ class RiscOS:
                     s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, val)
                 elif r[1] == 6 and r[2] == 1:
                     s.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, val)
+                elif r[1] == 0xFFFF and r[2] == 0x80:
+                    # SO_LINGER: struct linger (onoff, linger)
+                    onoff, secs = struct.unpack("<ii", bytes(self.mu.mem_read(r[3], 8)))
+                    s.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", onoff, secs))
+                    self.lingered = getattr(self, "lingered", 0) + (1 if onoff and secs == 0 else 0)
                 elif r[1] == 0xFFFF and r[2] == 0x1001:
                     # SO_SNDBUF; sndbuf_max pretends the stack's limit
                     if val > self.sndbuf_max:

@@ -78,6 +78,7 @@ typedef struct
 /* -v logs any wait this long between steps while a client is connected. */
 #define GAP_LOG_CS 25
 
+static void server_arc_connection_ended (void);
 static server srv;
 
 /* Messages: to stdout (the task window, Linux), or to the front end's
@@ -352,8 +353,9 @@ session_end (server *s, const char *why)
     }
   if (s->trans)
     {
-      trans_delete (s->trans);
-      s->trans = NULL;
+      struct trans *t = s->trans;
+      s->trans = NULL;            /* (before it's freed: see module.c's lost) */
+      trans_delete (t);
     }
   release_all (s);
   cap_free (&s->cap);
@@ -361,9 +363,94 @@ session_end (server *s, const char *why)
   s->tilebuf = NULL;
   s->was_up = 0;
   s->handshake_deadline = 0;
+  server_arc_connection_ended ();
   plat_set_clients (0);
   s->client_desc[0] = s->client_user[0] = 0;
   say ("client gone (%s)", why);
+}
+
+/* --- auto-reconnect ([MS-RDPBCGR] 5.5) ---------------------------------------
+   Once a client is up it gets a cookie: a logon id and 16 random bytes
+   (TS_SAVE_SESSION_INFO_PDU_DATA, INFOTYPE_LOGON_EXTENDED_INF). If its
+   connection then breaks off without a disconnect (the module's safety
+   net cuts it when the server thread was lost), the client may connect
+   again by itself, sending ARC_CS_PRIVATE_PACKET: the logon id and
+   HMAC-MD5(key: the random bytes, data: the new connection's client
+   random). That stands in for the password, for the same user. The
+   cookie is kept outside the server's state (server_abandon clears
+   that), and replaced for each client; the server stopping clears it. */
+static struct
+{
+  int valid;
+  int logon_id;
+  unsigned char random[16];
+  char user[64];
+  unsigned ended_cs;      /* when its client's connection ended; 0 while up */
+} arc;
+
+/* A cookie is only good within this long of its connection ending. */
+#define ARC_GRACE_CS (2 * 60 * 100)
+
+/* The client's connection ended (or the server was lost): the cookie's
+   grace time starts. */
+static void
+server_arc_connection_ended (void)
+{
+  if (arc.valid && arc.ended_cs == 0)
+    arc.ended_cs = plat_time_cs () | 1;
+}
+static int arc_next_id = 1;
+
+extern int rdps_hmac_md5 (const void *key, int key_len, const void *data, int data_len,
+                          unsigned char out[16]);
+
+/* 1 if the client presented this server's current cookie */
+static int
+arc_check (const struct xrdp_client_info *ci)
+{
+  unsigned char want[16], diff = 0;
+  int i;
+  if (!arc.valid || !ci->arc_present || ci->arc_logon_id != arc.logon_id
+      || strcmp (ci->username, arc.user) != 0)
+    return 0;
+  if (arc.ended_cs == 0 || (int) (plat_time_cs () - arc.ended_cs) > ARC_GRACE_CS)
+    return 0;           /* only to come back soon after a broken connection */
+  if (rdps_hmac_md5 (arc.random, 16, ci->arc_client_random, 32, want) != 0)
+    return 0;
+  for (i = 0; i < 16; i++)              /* in constant time */
+    diff |= (unsigned char) (want[i] ^ (unsigned char) ci->arc_verifier[i]);
+  return diff == 0;
+}
+
+static void
+arc_send (server *s, const struct xrdp_client_info *ci)
+{
+  /* infoType (4) = INFOTYPE_LOGON_EXTENDED_INF (3); TS_LOGON_INFO_EXTENDED:
+     Length (2) = 38, FieldsPresent (4) = LOGON_EX_AUTORECONNECTCOOKIE,
+     cbFieldData (4) = 28, ARC_SC_PRIVATE_PACKET (cbLen 28, Version 1,
+     LogonId, ArcRandomBits[16]); Pad (570). */
+  unsigned char d[4 + 38 + 570];
+  unsigned char *p = d;
+  memset (d, 0, sizeof d);
+  arc.logon_id = arc_next_id++;
+  g_random ((char *) arc.random, 16);
+  copy_text (arc.user, sizeof arc.user, ci->username);
+  arc.ended_cs = 0;
+  arc.valid = 1;
+#define PUT16(v) do { p[0] = (unsigned char) (v); p[1] = (unsigned char) ((v) >> 8); p += 2; } while (0)
+#define PUT32(v) do { PUT16 ((v) & 0xffff); PUT16 (((unsigned) (v)) >> 16); } while (0)
+  PUT32 (3);
+  PUT16 (38);
+  PUT32 (1);
+  PUT32 (28);
+  PUT32 (28);
+  PUT32 (1);
+  PUT32 (arc.logon_id);
+  memcpy (p, arc.random, 16);
+#undef PUT16
+#undef PUT32
+  if (libxrdp_send_session_info (s->session, (const char *) d, (int) sizeof d) != 0)
+    arc.valid = 0;
 }
 
 /* Once the client is up: the depth it chose, the first frame. */
@@ -392,13 +479,20 @@ session_up (server *s)
 {
   struct xrdp_client_info *ci = s->session->client_info;
 
-  /* The login, before the client is shown anything. */
-  if (s->logins.count > 0 && !auth_check (&s->logins, ci->username, ci->password))
-    {
-      say ("login refused for \"%s\"", ci->username);
-      memset (ci->password, 0, sizeof ci->password);
-      return 1;
-    }
+  /* The login, before the client is shown anything: the password, or
+     this server's auto-reconnect cookie. */
+  {
+    int reconnect = arc_check (ci);
+    if (reconnect)
+      say ("auto-reconnect: \"%s\" is back (its cookie checked)", ci->username);
+    if (s->logins.count > 0 && !reconnect
+        && !auth_check (&s->logins, ci->username, ci->password))
+      {
+        say ("login refused for \"%s\"", ci->username);
+        memset (ci->password, 0, sizeof ci->password);
+        return 1;
+      }
+  }
   memset (ci->password, 0, sizeof ci->password);
   {
     /* The screen again: other programs ran while the client was
@@ -436,6 +530,7 @@ session_up (server *s)
   cap_scan (&s->cap, s->scr.base, s->scr.stride, s->scr.height);
   cap_mark_all (&s->cap);
   copy_text (s->client_user, sizeof s->client_user, ci->username);
+  arc_send (s, ci);
   s->last_activity = plat_time_cs ();
   say ("client up: %d x %d, %d bpp, user \"%s\"", s->scr.width, s->scr.height,
        s->client_bpp, ci->username);
@@ -1084,6 +1179,11 @@ server_client_socket (void)
 void
 server_disconnect (void)
 {
+  /* Dropped on purpose: no coming back on the auto-reconnect cookie, and
+     libxrdp's goodbye (Disconnect Provider Ultimatum) tells the client so;
+     without it the client would take it for a broken connection and
+     connect again by itself. */
+  memset (&arc, 0, sizeof arc);
   if (srv.trans || srv.session)
     session_end (&srv, "disconnected from this computer");
 }
@@ -1096,6 +1196,7 @@ server_reload_logins (void)
   if (!s->opt || auth_load (s->opt->logins, &db) != 0)
     return -1;
   s->logins = db;
+  memset (&arc, 0, sizeof arc);     /* logins changed: password again */
   return 0;
 }
 
@@ -1110,6 +1211,7 @@ server_finish (void)
   trans_delete (s->listener);
   s->listener = NULL;
   s->running = 0;
+  memset (&arc, 0, sizeof arc);     /* no reconnecting to a stopped server */
   say ("stopped (%u tiles sent)", s->tiles_sent);
   log_end ();
 }
@@ -1125,6 +1227,7 @@ server_abandon (void)
 {
   server *s = &srv;
   release_all (s);
+  server_arc_connection_ended ();
   cap_free (&s->cap);
   free (s->tilebuf);
   plat_set_clients (0);

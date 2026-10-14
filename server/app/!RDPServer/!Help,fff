@@ -1,4 +1,4 @@
-RDPServer 0.2-test9 (test build)
+RDPServer 0.2-test10 (test build)
 ================================
 
 Lets you use this RISC OS desktop from another computer with Remote
@@ -34,8 +34,11 @@ while an error box is open, the client still sees the screen (the box
 included) and can click the box's buttons; a program that keeps the
 machine to itself doesn't stop it either. If such a program is stopped
 with Alt-Break while the server is in the middle of its turn, the server
-starts again by itself (the client has to connect again). It never
-holds the desktop up
+starts again by itself, and a client that supports automatic
+reconnection should connect again by itself within a few seconds,
+without asking for the password (seen with FreeRDP's /auto-reconnect
+and rdesktop; Windows App and Remote Desktop Connection support it too,
+not yet tried here). It never holds the desktop up
 for more than a couple of centiseconds at a time, also while a client is
 connecting.
 

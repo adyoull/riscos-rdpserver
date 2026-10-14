@@ -22,6 +22,7 @@
    Copyright (c) 2026 Andrew Youll. MIT licence (see LICENSE). */
 #include <stdint.h>
 #include <stdlib.h>
+#include <sys/socket.h>
 #include <string.h>
 #include <kernel.h>
 #include <swis.h>
@@ -164,6 +165,20 @@ lost (void)
   m.lost++;
   rdps_console_line ('s', "the server was lost (a program was stopped in the "
                      "middle of the server's turn): starting it again");
+  {
+    /* The client's connection is cut, not closed: a reset, with no
+       disconnect, is a broken connection to the client, which may then
+       connect again by itself with its auto-reconnect cookie. */
+    extern int rdps_socket_is_ours (int fd);
+    int sck = server_client_socket ();
+    if (sck >= 0 && rdps_socket_is_ours (sck))   /* not another program's by now */
+      {
+        struct linger l;
+        l.l_onoff = 1;
+        l.l_linger = 0;
+        setsockopt (sck, SOL_SOCKET, SO_LINGER, &l, sizeof l);
+      }
+  }
   rdps_thread_reset ();
   rdps_close_all_sockets ();
   plat_click_finish ();
