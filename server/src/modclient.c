@@ -26,6 +26,13 @@
 /* modcall.s: calls fn (a, b, c) with R12 = ws. */
 extern int rdps_modcall (const void *fn, void *ws, int a, int b, int c);
 
+#define STR2(x) #x
+#define STR(x) STR2 (x)
+/* What this front end needs of the module; also found in the binary by
+   tools/check-interface.sh, so a zip can't pair mismatched halves. */
+const char rdps_mod_interface_tag[] =
+  "RDPSModInterface=" STR (RDPS_MOD_INTERFACE) "," STR (RDPS_MOD_ENTRIES_N);
+
 static const char *mod_base;
 static void *mod_ws;
 static const rdps_mod_table *table;
@@ -34,7 +41,7 @@ static void (*hook) (const char *line);
 static unsigned seq;
 static const server_options *opts;
 static FILE *xrdp_log;
-static char start_error[160];
+static char start_error[240];
 
 static int
 call (int entry, int a, int b, int c)
@@ -71,8 +78,12 @@ find (void)
       || t->entries < RDPS_MOD_ENTRIES)
     {
       snprintf (start_error, sizeof start_error,
-                "The RDPServer module loaded is a different version: quit, "
-                "*RMKill RDPServer, and run !RDPServer again.");
+                "The RDPServer module loaded is a different version (it has "
+                "interface %u,%u; this !RDPServer needs %s): quit, *RMKill "
+                "RDPServer, and run !RDPServer again.",
+                t->magic == RDPS_MOD_MAGIC ? t->version : 0u,
+                t->magic == RDPS_MOD_MAGIC ? t->entries : 0u,
+                rdps_mod_interface_tag + 17);
       return -1;
     }
   mod_base = base;

@@ -42,6 +42,9 @@ enum
                              listens, from now (0.2-test11) */
   RDPS_MOD_ENTRIES
 };
+/* The same as a number, for the front end's interface tag (modclient.c) */
+#define RDPS_MOD_ENTRIES_N 10
+typedef char rdps_mod_entries_n_check[RDPS_MOD_ENTRIES == RDPS_MOD_ENTRIES_N ? 1 : -1];
 
 typedef struct
 {

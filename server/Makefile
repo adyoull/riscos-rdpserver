@@ -12,7 +12,7 @@ include $(RCD_DIR)/riscos.mk
 .DEFAULT_GOAL := all
 
 VERSION := 0.2
-TESTSUFFIX := -test11
+TESTSUFFIX := -test12
 B := build
 X := $(B)/xrdp
 XRDP_H = $(wildcard $(X)/common/*.h $(X)/libxrdp/*.h)
@@ -48,7 +48,7 @@ $(RO)/%.o: $(X)/libxrdp/%.c $(XRDP_H) | $(RO)
 	$(RO_CC) $(RO_CFLAGS) $(XRDP_FLAGS) -c $< -o $@
 $(RO)/%.o: $(X)/common/%.c $(XRDP_H) | $(RO)
 	$(RO_CC) $(RO_CFLAGS) $(XRDP_FLAGS) -c $< -o $@
-$(RO)/%.o: src/%.c src/*.h $(XRDP_H) | $(RO)
+$(RO)/%.o: src/%.c src/*.h src/mod/*.h $(XRDP_H) | $(RO)
 	$(RO_CC) $(RO_CFLAGS) -Wall -Wextra -c $< -o $@
 $(RO)/%.o: src/%.s | $(RO)
 	$(RO_CC) $(RO_CFLAGS) -c $< -o $@
@@ -73,6 +73,7 @@ $(B)/Sprites,ff9: $(ICONS)
 	  'sm!rdpserver=app/icons/sm-rdpserver.png' 'rdpserver-on=app/icons/rdpserver-on.png'
 
 $(B)/RDPServer-$(VERSION)$(TESTSUFFIX).zip: $(RO)/rdpserver $(MO)/RDPServer,ffa $(B)/Sprites,ff9 app/Licences-head.txt $(addprefix app/!RDPServer/,$(APP_FILES)) | checks
+	tools/check-interface.sh $(RO)/rdpserver $(MO)/RDPServer,ffa
 	rm -rf $(B)/app && mkdir -p '$(B)/app/!RDPServer'
 	$(RO_STRIP) -o $(RO)/rdpserver.stripped $(RO)/rdpserver
 	$(ELF2AIF) -e $(RO)/rdpserver.stripped '$(B)/app/!RDPServer/RDPServer,ff8' >/dev/null
@@ -109,7 +110,7 @@ $(MO)/%.o: $(X)/libxrdp/%.c $(XRDP_H) | $(MO)
 	$(RO_CC) $(MOD_CFLAGS) $(XRDP_FLAGS) -c $< -o $@
 $(MO)/%.o: $(X)/common/%.c $(XRDP_H) | $(MO)
 	$(RO_CC) $(MOD_CFLAGS) $(XRDP_FLAGS) -c $< -o $@
-$(MO)/%.o: src/%.c src/*.h $(XRDP_H) | $(MO)
+$(MO)/%.o: src/%.c src/*.h src/mod/*.h $(XRDP_H) | $(MO)
 	$(RO_CC) $(MOD_CFLAGS) -Wall -Wextra -c $< -o $@
 $(MO)/libc.o: src/mod/libc.c src/mod/*.h | $(MO)
 	$(RO_CC) $(MOD_CFLAGS) -fno-builtin -fno-tree-loop-distribute-patterns -Wall -Wextra -c $< -o $@
@@ -142,7 +143,7 @@ $(HO)/%.o: $(X)/libxrdp/%.c $(XRDP_H) | $(HO)
 	$(HOST_CC) $(HOST_CFLAGS) $(XRDP_FLAGS) -c $< -o $@
 $(HO)/%.o: $(X)/common/%.c $(XRDP_H) | $(HO)
 	$(HOST_CC) $(HOST_CFLAGS) $(XRDP_FLAGS) -c $< -o $@
-$(HO)/%.o: src/%.c src/*.h $(XRDP_H) | $(HO)
+$(HO)/%.o: src/%.c src/*.h src/mod/*.h $(XRDP_H) | $(HO)
 	$(HOST_CC) $(HOST_CFLAGS) -Wall -Wextra -c $< -o $@
 $(HO)/mbed/%.o: $(M)/library/%.c config/rdps_mbedtls_config.h | $(HO)
 	$(HOST_CC) $(HOST_CFLAGS) -w -c $< -o $@
@@ -164,7 +165,7 @@ $(QO)/%.o: $(X)/libxrdp/%.c $(XRDP_H) | $(QO)
 	$(LINUXARM_CC) $(QEMU_CFLAGS) $(XRDP_FLAGS) -c $< -o $@
 $(QO)/%.o: $(X)/common/%.c $(XRDP_H) | $(QO)
 	$(LINUXARM_CC) $(QEMU_CFLAGS) $(XRDP_FLAGS) -c $< -o $@
-$(QO)/%.o: src/%.c src/*.h $(XRDP_H) | $(QO)
+$(QO)/%.o: src/%.c src/*.h src/mod/*.h $(XRDP_H) | $(QO)
 	$(LINUXARM_CC) $(QEMU_CFLAGS) -Wall -Wextra -c $< -o $@
 $(QO)/mbed/%.o: $(M)/library/%.c config/rdps_mbedtls_config.h | $(QO)
 	$(LINUXARM_CC) $(QEMU_CFLAGS) -w -c $< -o $@

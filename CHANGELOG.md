@@ -1,5 +1,19 @@
 # Changelog
 
+## RDPServer 0.2-test12 (14 October 2026)
+
+- test11 wouldn't start: "The RDPServer module loaded is a different
+  version", even after *RMKill (owner). Its front end had been built a
+  minute before the module interface went to version 2, and the Makefile
+  didn't rebuild the front end when the module's headers (src/mod/*.h)
+  changed, so the zip paired a version 1 front end with a version 2
+  module. Fixed: those headers are now dependencies of every build, and
+  making the zip checks that the front end and module agree
+  (tools/check-interface.sh, reading an interface tag in the front end).
+- The message now says which interface each half has.
+- Otherwise the same as test11 (sound to the client, the mute option).
+  The module is still 0.12.
+
 ## RDPServer 0.2-test11 (14 October 2026)
 
 - Sound to the client (owner: "I want to look at piping the audio to

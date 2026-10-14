@@ -212,6 +212,11 @@ main (void)
 
   /* A module with another interface */
   loaded = 1;
+  module.table.version = 1;
+  module.table.entries = 9;
+  CHECK (server_start (&o) == 1 && strstr (server_start_error (), "has interface 1,9; this !RDPServer needs 2,10"),
+         "an older module (test10's): both versions said");
+  module.table.entries = RDPS_MOD_ENTRIES;
   module.table.version = 99;
   CHECK (server_start (&o) == 1 && strstr (server_start_error (), "different version"),
          "a module of another version is refused");
