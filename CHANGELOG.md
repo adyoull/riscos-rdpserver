@@ -1,5 +1,29 @@
 # Changelog
 
+## RDPServer 0.2-test6 (14 October 2026)
+
+- The server stopped for good when a program that had run away was
+  stopped with Alt-Break (owner, 14 Oct, Folio 0.0.1-test37 in a runaway
+  drag; the Log just ends). The server thread ran in USR mode, and RISC
+  OS runs transient callbacks on every return to USR mode, so they came
+  inside the thread, in whatever task was current: with a program
+  hogging the machine, that was nearly always that program, and the stop
+  came in the middle of the server's turn and threw it away. The thread
+  now runs in SYS mode (privileged, with the user stack), where no
+  callbacks come; its SWIs still use the SVC stack, which C modules such
+  as Internet need.
+- A safety net: if the module finds the thread was thrown away anyway
+  (a run it started never came back), it says so ("the server was
+  lost"), lets go of any keys, closes its sockets and starts the server
+  again, unless the front end stopped it or went meanwhile.
+- Output switched to a sprite in another program's turn is no longer
+  taken for a mode change. The VDU and mode variables are the sprite's
+  then; ScreenStart, DisplayStart and TotalScreenSize tell it apart. The
+  scan keeps the mode it has meanwhile (0.2-test5 logged "the screen mode
+  changed, at the same size" in that Log, probably from this).
+- The module is 0.07.
+
+
 ## RDPServer 0.2-test5 (13 October 2026)
 
 - The client flashed at every screen mode change (owner: "the flicker

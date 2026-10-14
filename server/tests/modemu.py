@@ -17,8 +17,16 @@ What's pretend, and how close it is:
   returns to USR mode) - except while a pretend error box is open, when,
   as in the Wimp's error box loop (s/Wimp07 pollit), no callbacks run and
   OS_Byte &81 0 0 goes through the module's ByteV claimant instead;
-- everything runs in SVC mode (OS_EnterOS/OS_LeaveOS change nothing), on
-  one SVC stack.
+- handlers run in SVC mode, entries in USR mode, on one SVC stack; a SWI
+  stays in its caller's mode here (the kernel's SVC side is Python), with
+  OS_EnterOS/OS_LeaveOS changing it;
+- a program being stopped (Alt-Break) is modelled two ways: kill_armed
+  makes the next return to USR mode with sp on the server thread's stack
+  stop "the task" there, as a callback the kernel runs on that return
+  would (USR-mode threads, 0.2-test2..5, were caught so); unwind_next
+  throws away whatever is running at the thread's next SWI, whatever its
+  mode (the safety net's test). Either way the call that resumed the
+  thread never returns, and the SVC stack starts afresh.
 
 Copyright (c) 2026 Andrew Youll. MIT licence (see LICENSE).
 """
@@ -158,6 +166,12 @@ class RiscOS:
         self.mouse = []          # (x, y) in OS units
         self.wheel = []
         self.vars = {}
+        self.redirect = 0       # this many screen reads see a sprite
+        self.kill_armed = False  # stop "the task" at a USR return in the thread
+        self.unwind_next = False  # throw away the thread at its next SWI
+        self.killed_in_thread = 0
+        self.unwound = 0
+        self._abandon = False
         self.sockets = {}        # handle -> socket
         self.foreign_sockets = set()   # numbers "other programs" have
         self.alive_tasks = set()
@@ -278,6 +292,7 @@ class RiscOS:
             self._mode(0x13)
         for i, x in enumerate(REGS):
             mu.reg_write(x, regs[i] & 0xFFFFFFFF)
+        self._abandon = False
         try:
             mu.emu_start(addr, RET, count=max_insns)
         except Exception as e:
@@ -286,6 +301,16 @@ class RiscOS:
                         ": " + self.fatal if self.fatal else ""))
         if self.fatal:
             raise Fatal(self.fatal)
+        if self._abandon:
+            # the task was stopped in the middle of this call: the kernel
+            # starts the SVC stack afresh, the call never returns
+            self._abandon = False
+            self._mode(0x10)
+            mu.reg_write(A.UC_ARM_REG_SP, USER_TOP)
+            mu.reg_write(A.UC_ARM_REG_LR, USER_LR)
+            self._mode(0x13)
+            mu.reg_write(A.UC_ARM_REG_SP, SVC_TOP)
+            return [0] * 13, 0x13
         pc = mu.reg_read(A.UC_ARM_REG_PC)
         if pc != RET:
             raise Fatal("code at &%X didn't return (pc &%X, module +&%X)" % (addr, pc, pc - self.base))
@@ -370,6 +395,13 @@ class RiscOS:
         # data from its base, so anywhere else they abort (0.2-test1 on the
         # Pi: inside Internet +&4A8).
         sp = mu.reg_read(A.UC_ARM_REG_SP)
+        in_thread = DA <= sp < DA + DA_MAX
+        if self.unwind_next and in_thread:
+            self.unwind_next = False
+            self.unwound += 1
+            self._abandon = True
+            mu.emu_stop()
+            return
         if (cpsr & 0x1F) == 0x13 and not (SVC_TOP - SVC_REAL <= sp <= SVC_TOP):
             self.fatal = ("SWI %s called with sp &%X, not on the SVC stack (pc &%X, "
                           "module +&%X)" % (NAMES.get(num & ~XBIT, "&%X" % num), sp, pc,
@@ -396,6 +428,13 @@ class RiscOS:
         elif (num & ~XBIT) == SWI["OS_LeaveOS"]:
             cpsr = (cpsr & ~0x1F) | 0x10
         mu.reg_write(A.UC_ARM_REG_CPSR, cpsr)
+        if self.kill_armed and (cpsr & 0x1F) == 0x10 and in_thread:
+            # back to USR mode, in the thread: the kernel runs callbacks
+            # here, and one of them stops the current task
+            self.kill_armed = False
+            self.killed_in_thread += 1
+            self._abandon = True
+            mu.emu_stop()
 
     def sock_error(self, e):
         n = BSD_ERRNO.get(getattr(e, "errno", None) or errno.EIO, 5)
@@ -430,7 +469,15 @@ class RiscOS:
                 raise Fatal("OS_Word %d" % r[0])
         elif n == SWI["OS_ReadVduVariables"]:
             vals = {0: 0x40, 3: 0xFFFFFFFF, 4: 1, 5: 1, 6: self.sw * 4, 9: 5,
-                    11: self.sw - 1, 12: self.sh - 1, 149: self.screen}
+                    11: self.sw - 1, 12: self.sh - 1, 149: self.screen,
+                    148: self.screen, 150: SCREEN_MAP}
+            if self.redirect > 0:
+                # output switched to a sprite (OS_SpriteOp 60) in some
+                # program's turn: its mode, its ScreenStart; DisplayStart
+                # stays the screen's
+                self.redirect -= 1
+                vals.update({0: 0, 3: 255, 6: 320, 9: 3, 11: 319, 12: 199,
+                             148: RMA + 0x100000, 150: 64000})
             i = 0
             while True:
                 v = self.r32(r[0] + 4 * i)

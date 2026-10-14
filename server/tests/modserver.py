@@ -156,6 +156,8 @@ try:
                         m.service(1, 0x57)
                         m.errorbox = True
                         box_open_at = time.monotonic()
+                    elif cmd.startswith("sprite "):
+                        m.redirect = int(cmd.split()[1])
                     elif cmd == "bank":
                         m.swap_bank()
                     elif cmd.startswith("mode "):

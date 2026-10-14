@@ -16,6 +16,7 @@ __asm__ (".data\n.globl rdps_clickup_ticker\n"
 extern const unsigned char rdps_clickup_ticker[];
 
 static unsigned char screen[16];
+static int redirect;              /* output switched to a sprite */
 static unsigned char *rma_block;
 static int rma_size, rma_freed, rma_fail, sync_r[3], callafter_r[3], callafter_calls,
   callafter_fail, removed_ticker[2], removed_callback[2], remove_calls;
@@ -80,6 +81,9 @@ static const _kernel_oserror *vdu (int swi, int r[10])
       case 11: *out = 1919; break;
       case 12: *out = 1079; break;
       case 149: *out = (int) (intptr_t) screen; break;
+      /* a sprite is far from screen memory (RMA, a dynamic area) */
+      case 148: *out = (int) ((intptr_t) screen ^ (redirect ? 0x40000000 : 0)); break;
+      case 150: *out = 8 << 20; break;
       default:
         fprintf (stderr, "unexpected VDU variable %d\n", *in);
         abort ();
@@ -295,6 +299,11 @@ int main (void)
   CHECK (s.log2bpp == 5 && s.ncolour == -1 && s.modeflags == 0x40, "the format");
   CHECK (s.stride == 7680 && s.base == screen, "LineLength and DisplayStart");
   CHECK (s.xeig == 1 && s.yeig == 2, "eig factors");
+  CHECK (!s.redirected, "output to the screen: ScreenStart is DisplayStart's bank");
+  redirect = 1;
+  CHECK (plat_screen (&s) == NULL && s.redirected && s.base == screen,
+         "output to a sprite: redirected, and base still DisplayStart");
+  redirect = 0;
 
   /* Top-left pixel (0,0) is the top of the screen: OS y = (1080-1) << 2. */
   plat_mouse_to (&s, 0, 0);

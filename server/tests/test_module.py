@@ -196,6 +196,54 @@ check(set_file(m, LOGINS_PATH, b"test " + b"00" * 16 + b" " + b"00" * 32 + b"\n"
 check(m.entry(RELOAD) == 0, "reloaded")
 check(status(m)["login_set"] == 1, "a login is now needed")
 
+# --- 6b: a program stopped (Alt-Break) while the thread ran in its time ----
+# (owner, 14 Oct 2026: Folio ran away, Alt-Break stopped it, and the
+# server never ran again.) The kernel runs callbacks on a return to USR
+# mode; with the thread in USR mode, a callback that stops the current
+# task came inside the thread. In SYS mode none can.
+messages(m)
+m.kill_armed = True
+run_for(m, 40)
+m.kill_armed = False
+check(m.killed_in_thread == 0, "no callback comes inside the server thread (it runs in SYS mode)")
+msgs = messages(m)
+check("was lost" not in msgs, "and nothing was lost")
+check(status(m)["listening"] == 1, "still listening")
+# The safety net: the thread thrown away in the middle of a SWI anyway.
+m.unwind_next = True
+run_for(m, 60)
+check(m.unwound == 1, "the thread was thrown away in a SWI (the test's doing)")
+msgs = messages(m)
+check("the server was lost" in msgs, "the module noticed (%r)" % msgs[-200:])
+check("listening on port %d" % port in msgs, "and started the server again (%r)" % msgs[-200:])
+check(status(m)["listening"] == 1, "listening again")
+try:
+    c = socket.create_connection(("127.0.0.1", port), timeout=2)
+    run_for(m, 60)     # an idle server looks every 25 cs
+    st = status(m)
+    check(st["connecting"] == 1, "and a client is taken on (%r %r)" % (st, messages(m)[-300:]))
+    c.close()
+    run_for(m, 20)
+except OSError as e:
+    check(False, "the port takes connections again (%s)" % e)
+
+# Lost again, and the front end goes (Service_WimpCloseDown) before any
+# callback: the server mustn't start again behind its back.
+m.unwind_next = True
+for i in range(200):
+    if m.unwound == 2:
+        break
+    m.run_once()
+    time.sleep(0.003)
+check(m.unwound == 2, "thrown away again")
+m.service(0, 0x53, 0x1234)            # Service_WimpCloseDown, the front end
+run_for(m, 60)
+msgs = messages(m)
+check(status(m)["listening"] == 0, "the front end went: not started again (%r)" % msgs[-200:])
+check(m.entry(ATTACH, 0x1234) == 0 and m.entry(START, options(m, port)) == 0,
+      "attached and started again by the front end")
+check(status(m)["listening"] == 1, "listening")
+
 # --- 7: stop, detach, finalise ----------------------------------------------
 m.entry(STOP)
 check(status(m)["listening"] == 0, "stopped")

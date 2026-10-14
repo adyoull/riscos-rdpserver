@@ -367,6 +367,26 @@ session_end (server *s, const char *why)
 }
 
 /* Once the client is up: the depth it chose, the first frame. */
+/* The screen's mode, read where output isn't going to a sprite: another
+   program's turn may have it redirected (see plat_screen), so a read
+   that says so is tried again (the thread yields meanwhile, so that
+   program can finish), up to about half a second. NULL, or why not. */
+static const char *
+screen_read (rdps_screen *out)
+{
+  int tries;
+  for (tries = 0; tries < 50; tries++)
+    {
+      const char *e = plat_screen (out);
+      if (e)
+        return e;
+      if (!out->redirected)
+        return NULL;
+      rdps_wait_cs (1);
+    }
+  return "another program kept output switched to a sprite";
+}
+
 static int
 session_up (server *s)
 {
@@ -384,7 +404,7 @@ session_up (server *s)
     /* The screen again: other programs ran while the client was
        connecting (a mode change meanwhile would leave the old one). */
     rdps_screen cur;
-    if (plat_screen (&cur) != NULL || cur.width != s->scr.width
+    if (screen_read (&cur) != NULL || cur.width != s->scr.width
         || cur.height != s->scr.height || cur.stride != s->scr.stride
         || pix_format_of (cur.log2bpp, cur.ncolour, cur.modeflags) != s->fmt)
       {
@@ -528,7 +548,7 @@ is_term (void)
 static void
 session_start (server *s, struct trans *t)
 {
-  const char *e = plat_screen (&s->scr);
+  const char *e = screen_read (&s->scr);
 
   if (e)
     {
@@ -706,7 +726,7 @@ screen_resized (server *s)
 
   /* The desktop redraws everything after a mode change (and a program
      may change mode more than once): wait until it stays put. */
-  if (plat_screen (&cur) != NULL)
+  if (screen_read (&cur) != NULL)
     {
       session_end (s, "the screen mode changed");
       return -1;
@@ -716,7 +736,7 @@ screen_resized (server *s)
       rdps_wait_cs (RESIZE_SETTLE_CS);
       if (!s->session || !s->trans || rdps_thread_ending ())
         return -1;
-      if (plat_screen (&again) != NULL)
+      if (screen_read (&again) != NULL)
         {
           session_end (s, "the screen mode changed");
           return -1;
@@ -937,7 +957,36 @@ step (unsigned max_wait_cs)
       int band, h = s->scr.height;
       /* A mode change moves or resizes the screen: stop reading the old
          one, and give the client the new size (or end the session). */
-      if (plat_screen (&cur) != NULL
+      const char *e = plat_screen (&cur);
+      if (e == NULL && cur.redirected)
+        {
+          /* Output is going to a sprite in some program's turn (one
+             that's running away, say, so this is where the module's
+             time comes): the mode read is the sprite's, not the
+             screen's. DisplayStart is still the screen's: follow its
+             bank, keep the mode. (0.2-test5 took the sprite's mode for a
+             mode change, and read the screen as if it had that mode.) */
+          const unsigned char *shown = cur.base;
+          size_t frame = s->scr.stride * (size_t) s->scr.height;
+          uintptr_t d = (uintptr_t) shown - (uintptr_t) s->scr.base;
+          cur = s->scr;
+          /* Another bank of this mode (double-buffering): follow it. Any
+             other move (a mode change meanwhile, the memory moved):
+             don't read anything until a read that isn't redirected says
+             what the screen is now. */
+          if (shown == s->scr.base)
+            ;
+          else if (frame && s->scr.total
+                   && (uintptr_t) (d + s->scr.total) < 2 * (uintptr_t) s->scr.total
+                   && d % frame == 0)
+            cur.base = shown;
+          else
+            {
+              s->next_scan = now + 2;
+              return 2;
+            }
+        }
+      else if (e != NULL
           || cur.width != s->scr.width || cur.height != s->scr.height
           || cur.log2bpp != s->scr.log2bpp || cur.stride != s->scr.stride
           || pix_format_of (cur.log2bpp, cur.ncolour, cur.modeflags) != s->fmt)
@@ -1057,6 +1106,25 @@ server_finish (void)
   s->running = 0;
   say ("stopped (%u tiles sent)", s->tiles_sent);
   log_end ();
+}
+
+/* The server thread was lost in the middle of something (srvthread.c's
+   rdps_thread_reset): let go of anything held on RISC OS and forget the
+   rest. The screen copy and the tile buffer (the big ones: 8 MB at
+   1920 x 1080) are freed, as nothing changes them in the middle of a
+   wait; libxrdp's session and the logins are left, since they may be
+   half changed (a few KB each time). */
+void
+server_abandon (void)
+{
+  server *s = &srv;
+  release_all (s);
+  cap_free (&s->cap);
+  free (s->tilebuf);
+  plat_set_clients (0);
+  if (s->running)
+    log_end ();                 /* server_start starts libxrdp's log again */
+  memset (s, 0, sizeof *s);
 }
 
 void

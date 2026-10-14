@@ -17,6 +17,7 @@
 static unsigned char *screen;
 static int sw = 640, sh = 480;
 static int spad;                 /* pixels past the end of each line */
+static int sprite_reads;         /* this many reads see output going to a sprite */
 static int square_at = -1;
 
 /* TBGR: red in the low byte. */
@@ -79,7 +80,14 @@ plat_screen (rdps_screen *s)
         char word[8] = "";
         long at0 = ftell (f);
         /* "bank": the same mode, another screen bank shown (OS_Byte 113) */
-        if (fscanf (f, "%7s", word) == 1 && strcmp (word, "bank") == 0)
+        /* "sprite N": the next N reads find output switched to a sprite
+           (another program's turn, OS_SpriteOp 60): its mode */
+        if (fscanf (f, "%7s", word) == 1 && strcmp (word, "sprite") == 0)
+          {
+            if (fscanf (f, "%d", &sprite_reads) != 1)
+              sprite_reads = 100;
+          }
+        else if (strcmp (word, "bank") == 0)
           {
             n = malloc ((size_t) (sw + spad) * sh * 4);
             if (n)
@@ -123,6 +131,19 @@ plat_screen (rdps_screen *s)
   s->xeig = s->yeig = 1;
   s->stride = (size_t) (sw + spad) * 4;
   s->base = screen;
+  s->total = (size_t) (sw + spad) * sh * 4;
+  s->redirected = 0;
+  if (sprite_reads > 0)
+    {
+      sprite_reads--;
+      s->width = 320;
+      s->height = 200;
+      s->log2bpp = 3;
+      s->ncolour = 255;
+      s->modeflags = 0;
+      s->stride = 320;
+      s->redirected = 1;            /* base stays the screen (DisplayStart) */
+    }
   return NULL;
 }
 

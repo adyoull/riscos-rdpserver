@@ -19,9 +19,17 @@ typedef struct
   int xeig, yeig;              /* OS units per pixel = 1 << eig */
   size_t stride;               /* bytes from one row to the next */
   const unsigned char *base;   /* the top row (the displayed bank) */
+  size_t total;                /* TotalScreenSize: all the screen's banks */
+  int redirected;              /* 1: output was going to a sprite as this was
+                                  read, so only base (DisplayStart) is the
+                                  screen's: the rest is the sprite's */
 } rdps_screen;
 
-/* Reads the current mode. Returns NULL or the error's text. */
+/* Reads the current mode. Returns NULL or the error's text. The module
+   can run in the middle of another program's turn, which may have
+   switched output to a sprite (OS_SpriteOp 60): the VDU and mode
+   variables are then the sprite's (PRM: "The VDU Variables and Mode
+   Variables will also reflect the change"), and redirected is set. */
 const char *plat_screen (rdps_screen *s);
 
 /* Moves the mouse to pixel (x, y), top-left origin, on screen s. */

@@ -60,3 +60,10 @@ co_inside (void)
 {
   return in;
 }
+
+void
+co_reset (void)
+{
+  alive = 0;
+  in = 0;
+}

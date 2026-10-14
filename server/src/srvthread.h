@@ -17,6 +17,11 @@
 /* Sets the thread up on the given stack (at least 64 KB). 0 or -1. */
 int rdps_thread_init (void *stack, size_t size);
 
+/* The thread was lost (a resume never came back): forget it and its
+   server (keys and buttons let go, nothing freed); rdps_thread_init can
+   be called again. */
+void rdps_thread_reset (void);
+
 /* Driver: 1 if the thread wants to run now (its wait is over, or a
    command is waiting), given the monotonic time in cs. */
 int rdps_thread_due (unsigned now);

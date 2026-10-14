@@ -12,7 +12,7 @@ include $(RCD_DIR)/riscos.mk
 .DEFAULT_GOAL := all
 
 VERSION := 0.2
-TESTSUFFIX := -test5
+TESTSUFFIX := -test6
 B := build
 X := $(B)/xrdp
 M := $(B)/upstream/mbedtls

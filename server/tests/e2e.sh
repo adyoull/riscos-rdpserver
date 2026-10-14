@@ -170,6 +170,14 @@ echo bank >"$OUT/mode"
 sleep 3
 [ "$(grep -c "client gone" "$OUT/server.log")" -eq "$before_gone" ] && ! grep -q "desktop is now" "$OUT/server.log" \
   && ok "a screen bank swap isn't taken for a mode change" || bad "a bank swap ended or resized the session"
+# Output switched to a sprite in another program's turn (a runaway one,
+# say), for 40 reads (a few scans): its mode isn't the screen's, so no mode change.
+echo "sprite 40" >"$OUT/mode"
+sleep 8
+! grep -q "screen mode changed" "$OUT/server.log" && [ "$(grep -c "client gone" "$OUT/server.log")" -eq "$before_gone" ] \
+  && ok "output redirected to a sprite isn't taken for a mode change" || bad "redirected output: $(grep 'mode changed' "$OUT/server.log" | tail -1)"
+import -window root "$OUT/sprite.png" 2>/dev/null
+p=$(pixel "$OUT/sprite.png" 100 400); near "$p" 0,0,255 && ok "the screen still sent meanwhile: blue at 100,400" || bad "redirected: 100,400 is $p"
 # A mode change at the same size (here a longer LineLength): the client
 # isn't resized (that would make it flash), only the picture is sent again.
 echo "640x480 pad" >"$OUT/mode"

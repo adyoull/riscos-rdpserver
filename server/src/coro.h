@@ -30,4 +30,8 @@ void co_yield (void);
 /* 1 while running inside the coroutine. */
 int co_inside (void);
 
+/* Forgets the coroutine (alive and inside cleared), for when a resume
+   never came back: something unwound it. co_start can be called again. */
+void co_reset (void);
+
 #endif

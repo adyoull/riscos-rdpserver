@@ -23,8 +23,9 @@
 const char *
 plat_screen (rdps_screen *s)
 {
-  static const int in[] = { 0, 3, 4, 5, 6, 9, 11, 12, 149, -1 };
-  int out[9];
+  static const int in[] = { 0, 3, 4, 5, 6, 9, 11, 12, 149, 148, 150, -1 };
+  int out[11];
+  uintptr_t display, start, total;
   const _kernel_oserror *e;
 
   memset (out, 0, sizeof out);
@@ -40,6 +41,19 @@ plat_screen (rdps_screen *s)
   s->width = out[6] + 1;
   s->height = out[7] + 1;
   s->base = (const unsigned char *) (uintptr_t) (unsigned) out[8];
+  /* ScreenStart (148) is where the VDU drivers write: a bank of screen
+     memory (DisplayStart's or another, double-buffering), or a sprite
+     while output is redirected. DisplayStart (149) is what the display
+     hardware shows, which redirection doesn't change; TotalScreenSize
+     (150) is the screen memory's size (or the sprite's, while
+     redirected: either way it's checked against DisplayStart). Output
+     goes to the screen only if ScreenStart is within that of
+     DisplayStart (written so it can't wrap at 4 GB). */
+  display = (uintptr_t) (unsigned) out[8];
+  start = (uintptr_t) (unsigned) out[9];
+  total = (uintptr_t) (unsigned) out[10];
+  s->total = total;
+  s->redirected = total != 0 && !((uintptr_t) (start - display + total) < 2 * total);
   return NULL;
 }
 

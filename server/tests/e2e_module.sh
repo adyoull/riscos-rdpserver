@@ -130,6 +130,13 @@ ctl bank
 sleep 3
 [ "$(gones)" -eq "$g" ] && ! grep -q "desktop is now" "$OUT/server.log" \
   && ok "a screen bank swap isn't taken for a mode change" || bad "a bank swap ended or resized the session"
+# output switched to a sprite in some program's turn (a runaway program,
+# say), for many reads: the sprite's mode isn't the screen's
+ctl "sprite 40"
+sleep 8; shot freerdp-sprite
+! grep -q "screen mode changed" "$OUT/server.log" && [ "$(gones)" -eq "$g" ] \
+  && ok "output redirected to a sprite isn't taken for a mode change" || bad "redirected output: $(grep 'mode changed' "$OUT/server.log" | tail -1)"
+expect freerdp-sprite 100,400 0,0,255 "the screen still sent while output is redirected: blue"
 # a mode change while FreeRDP watches: the client is resized, carries on
 ctl "mode 800x600"
 for i in $(seq 1 30); do grep -q "desktop is now 800 x 600" "$OUT/server.log" && break; sleep 0.5; done

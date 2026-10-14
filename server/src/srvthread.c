@@ -71,6 +71,22 @@ rdps_thread_init (void *stack, size_t size)
   return 0;
 }
 
+/* The module's safety net: the thread was lost (a resume never came
+   back). Forget it and its server; the caller closes the sockets and
+   calls rdps_thread_init again. The big buffers are freed; what may be
+   half changed (libxrdp's session) is left: a few KB each time. */
+void
+rdps_thread_reset (void)
+{
+  co_reset ();
+  server_abandon ();
+  cmd = CMD_NONE;
+  dropping = 0;
+  stopping = 0;
+  running = 0;
+  ready = 0;
+}
+
 int
 rdps_thread_due (unsigned now)
 {

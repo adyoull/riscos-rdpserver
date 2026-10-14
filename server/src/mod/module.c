@@ -20,6 +20,7 @@
    uses the entries in modapi.h.
 
    Copyright (c) 2026 Andrew Youll. MIT licence (see LICENSE). */
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include <kernel.h>
@@ -47,7 +48,12 @@ static struct
   int *private_word;
   int ticker, bytev;                      /* installed */
   volatile int callback_pending;
-  volatile int driving;                   /* in drive(): no nesting */
+  volatile int driving;                   /* running the thread: no nesting */
+  uintptr_t driving_sp;                   /* the SVC sp where that began */
+  unsigned driving_since;                 /* and when (cs) */
+  int started;                            /* mod_start succeeded, no stop since */
+  int restart;                            /* start again (the thread was lost) */
+  unsigned lost;
   int attached_task;                      /* the front end, or 0 */
   int dead;
   void *stack;
@@ -123,15 +129,92 @@ mod_messages (unsigned *seq, char *buf, int size)
 
 /* --- running the server --------------------------------------------------- */
 
+/* The thread can be run from here (SVC mode): not already running it.
+   One that is shows as m.driving set with its frames on the SVC stack
+   below driving_sp, so anything that runs meanwhile (an interrupt, a SWI
+   it makes) has sp below that. If m.driving is set but sp isn't below
+   it, the run that set it has gone: its frames were thrown away (a
+   program was stopped while the thread ran in its time, and the stop
+   unwound the SVC stack too) and the thread will never yield back to
+   it. Since the thread runs in SYS mode (0.2-test6), no callback should
+   come inside it any more; this is the safety net if something else
+   does that. */
+static uintptr_t
+svc_sp (void)
+{
+  uintptr_t sp;
+  __asm__ volatile ("mov %0, sp" : "=r" (sp));
+  return sp;
+}
+
+static void
+lost (void)
+{
+  /* Anything nested in the clean-up below sees a run in progress here,
+     not another loss. */
+  m.driving = 1;
+  m.driving_sp = svc_sp ();
+  m.driving_since = plat_time_cs ();
+  m.lost++;
+  rdps_console_line ('s', "the server was lost (a program was stopped in the "
+                     "middle of the server's turn): starting it again");
+  rdps_thread_reset ();
+  rdps_close_all_sockets ();
+  plat_click_finish ();
+  m.driving = 0;
+  if (rdps_thread_init (m.stack, STACK_BYTES) != 0)
+    {
+      m.dead = 1;
+      return;
+    }
+  m.restart = m.started;
+}
+
+static int
+take (void)
+{
+  uintptr_t sp = svc_sp ();
+  if (m.dead)
+    return 0;
+  if (m.driving)
+    {
+      /* Inside a run (deeper on the SVC stack): no nesting. A run yields
+         every few cs (the RSA step, the longest, takes 16 cs on a Pi 4),
+         so one "in progress" for 5 s from a deeper caller (a ByteV in an
+         error box opened from deep code, say) is lost too. */
+      if (sp < m.driving_sp
+          && (int) (plat_time_cs () - m.driving_since) < 500)
+        return 0;
+      lost ();
+      if (m.dead)
+        return 0;
+    }
+  m.driving = 1;
+  m.driving_sp = sp;
+  m.driving_since = plat_time_cs ();
+  return 1;
+}
+
+static void
+give (void)
+{
+  m.driving = 0;
+}
+
 static void
 drive (void)
 {
-  if (m.driving || m.dead)
+  if (!take ())
     return;
-  m.driving = 1;
+  if (m.restart)
+    {
+      m.restart = 0;
+      if (rdps_cmd_start (&m.opt) != 0)
+        m.started = 0;
+    }
   if (rdps_thread_due (plat_time_cs ()))
     rdps_thread_run ();
-  m.driving = 0;
+  give ();
 }
 
 /* The ticker (SVC mode, interrupts off): ask for a callback if one isn't
@@ -164,7 +247,7 @@ mod_callback (void)
 void
 mod_bytev (void)
 {
-  if (!mod_errorbox_open || m.driving)
+  if (!mod_errorbox_open)
     return;
   if (rdps_thread_due (plat_time_cs ()))
     m.errorbox_steps++;
@@ -180,11 +263,12 @@ mod_service (int r0, int service, int r2)
     {
       /* Service_WimpCloseDown for the front end: it has gone (perhaps
          without detaching), so stop serving. */
-      if (!m.driving)
+      if (take ())
         {
-          m.driving = 1;
           rdps_cmd_stop ();
-          m.driving = 0;
+          m.started = 0;
+          m.restart = 0;
+          give ();
         }
       m.attached_task = 0;
     }
@@ -237,11 +321,12 @@ mod_attach (int task)
 void
 mod_stop (void)
 {
-  if (m.driving)
+  if (!take ())
     return;
-  m.driving = 1;
   rdps_cmd_stop ();
-  m.driving = 0;
+  m.started = 0;
+  m.restart = 0;
+  give ();
 }
 
 void
@@ -263,8 +348,10 @@ int
 mod_start (const rdps_mod_options *o)
 {
   int r;
-  if (m.dead || m.driving)
+  if (!take ())
     return 1;
+  m.started = 0;
+  m.restart = 0;
   m.mopt = *o;
   m.mopt.port[sizeof m.mopt.port - 1] = 0;
   m.mopt.address[sizeof m.mopt.address - 1] = 0;
@@ -281,31 +368,29 @@ mod_start (const rdps_mod_options *o)
   m.opt.rows_per_scan = m.mopt.rows_per_scan;
   m.opt.verbose = m.mopt.verbose;
   m.opt.log_file = NULL;               /* libxrdp's log: to the messages */
-  m.driving = 1;
   r = rdps_cmd_start (&m.opt);
-  m.driving = 0;
+  m.started = r == 0;
+  give ();
   return r;
 }
 
 void
 mod_disconnect (void)
 {
-  if (m.driving)
+  if (!take ())
     return;
-  m.driving = 1;
   rdps_cmd_disconnect ();
-  m.driving = 0;
+  give ();
 }
 
 int
 mod_reload_logins (void)
 {
   int r;
-  if (m.driving)
+  if (!take ())
     return -1;
-  m.driving = 1;
   r = rdps_cmd_reload_logins ();
-  m.driving = 0;
+  give ();
   return r;
 }
 
@@ -417,11 +502,12 @@ mod_final (int fatal)
       if (rdps_swi (TaskManager_TaskNameFromHandle, r) == NULL)
         return &err_inuse;
     }
-  if (!m.dead && !m.driving)
+  if (take ())
     {
-      m.driving = 1;
       rdps_cmd_stop ();
-      m.driving = 0;
+      m.started = 0;
+      m.restart = 0;
+      give ();
     }
   remove_handlers ();
   plat_click_finish ();

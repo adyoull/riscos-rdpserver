@@ -34,6 +34,9 @@ typedef struct
 int server_start (const server_options *o);
 int server_step (unsigned max_wait_cs);
 void server_finish (void);
+
+/* The server thread was lost: forget everything without freeing it. */
+void server_abandon (void);
 /* Quitting: server_finish, and on RISC OS let go of the module. */
 void server_shutdown (void);
 /* Why server_start failed, if it knows (else NULL). */
