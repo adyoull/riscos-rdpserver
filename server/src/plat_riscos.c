@@ -57,6 +57,52 @@ plat_screen (rdps_screen *s)
   return NULL;
 }
 
+/* ColourTrans_ReadPalette (PRM: R0 = R1 = -1, the current mode and
+   palette; entries &BBGGRR00, all 256 in 256 colour modes). How many
+   came from R3, the space left in the buffer, which can only be read one
+   way (R2 is "incremented by words written": bytes or words?). */
+int
+plat_palette (uint32_t rgb[256])
+{
+  static uint32_t buf[256];
+  int left = 0, n, i;
+  if (_swix (ColourTrans_ReadPalette, _INR (0, 4) | _OUT (3), -1, -1, (int) (uintptr_t) buf,
+             (int) sizeof buf, 0, &left) != NULL)
+    return 0;
+  if (left < 0 || left > (int) sizeof buf)
+    return 0;
+  n = ((int) sizeof buf - left) / 4;
+  for (i = 0; i < n; i++)
+    {
+      uint32_t v = buf[i];
+      rgb[i] = (((v >> 8) & 255) << 16) | (((v >> 16) & 255) << 8) | ((v >> 24) & 255);
+    }
+  return n;
+}
+
+int
+plat_var_int (const char *name, int def)
+{
+  char v[16];
+  int len = -1;
+  if (_swix (OS_ReadVarVal, _INR (0, 4) | _OUT (2), name, v, (int) sizeof v - 1, 0, 3, &len)
+      != NULL || len <= 0 || len >= (int) sizeof v)
+    return def;
+  v[len] = 0;
+  return atoi (v);
+}
+
+/* OS_Byte 71, R1 = 255: read the keyboard layout number (PRM: "returned
+   as the actual value", 1:1 with territory numbers). */
+int
+plat_keyboard (void)
+{
+  int r1 = 0;
+  if (_swix (OS_Byte, _INR (0, 1) | _OUT (1), 71, 255, &r1) != NULL)
+    return 0;
+  return r1 > 0 && r1 < 128 ? r1 : 0;
+}
+
 void
 plat_mouse_to (const rdps_screen *s, int x, int y)
 {
@@ -76,6 +122,40 @@ void
 plat_key (int low_level_key, int down)
 {
   _swix (OS_CallAVector, _INR (0, 1) | _IN (9), down ? 2 : 1, low_level_key, KeyV);
+}
+
+/* OS_Byte 138 (insert a byte into a buffer), buffer 0: the keyboard.
+   Bytes 0 and &80-&FF go in as 0 then the byte, or they'd be taken for
+   function keys (the PRM: "Ì" would be F12, "ü" Ctrl-Shift-F12, which
+   shuts the desktop down). Only when there's room for both (OS_Byte 128,
+   255: bytes in the keyboard buffer; it holds at least 31), with
+   interrupts off between, so a key pressed here can't come between
+   them. */
+int
+plat_char (int c)
+{
+  int used_lo = 0, used_hi = 0, r = -1;
+  c &= 0xFF;
+  _swix (OS_IntOff, 0);
+  if (_swix (OS_Byte, _INR (0, 1) | _OUTR (1, 2), 128, 255, &used_lo, &used_hi) == NULL
+      && ((used_lo & 0xFF) | (used_hi << 8)) <= 28)
+    {
+      if (c == 0 || c >= 0x80)
+        _swix (OS_Byte, _INR (0, 2), 138, 0, 0);
+      _swix (OS_Byte, _INR (0, 2), 138, 0, c);
+      r = 0;
+    }
+  _swix (OS_IntOn, 0);
+  return r;
+}
+
+int
+plat_alphabet (void)
+{
+  int a = 0;
+  if (_swix (OS_Byte, _INR (0, 1) | _OUT (1), 71, 127, &a) != NULL)
+    return 0;
+  return a;
 }
 
 /* Clicks (see clickup.s): the routines are copied into an RMA block, with

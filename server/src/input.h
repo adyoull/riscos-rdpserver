@@ -49,6 +49,9 @@ typedef struct
   /* A whole click: button down now, up INQ_CLICK_CS later by itself.
      0 = done; -1 = can't (then down and up go separately). May be NULL. */
   int (*click) (void *ctx, int ll);
+  /* A byte typed (in RISC OS's alphabet), in order with the keys: 0, or
+     -1 if there's no room now (it's offered again later). May be NULL. */
+  int (*text) (void *ctx, int c);
   void *ctx;
 } inq_sink;
 
@@ -73,9 +76,16 @@ typedef struct
                                        don't return until it's up */
   int clicked;                      /* a click went: the caller should let
                                        the Wimp see it before anything else */
+  int plain;                        /* buttons as keys, as they come (no
+                                       clicks by ticker): for comparing */
+  int click_cs;                     /* a click's down to its up (INQ_CLICK_CS) */
 } inq;
 
 void inq_init (inq *q);
+/* A byte of a character the client sent as itself (RDP's Unicode
+   keyboard event, already in RISC OS's alphabet): typed into the
+   keyboard buffer in its turn. */
+void inq_char (inq *q, int c);
 
 /* Queue input. Repeated key-downs (clients repeat held keys; RISC OS
    repeats on its own) and ups for keys that aren't down are dropped. */

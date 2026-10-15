@@ -12,7 +12,7 @@ include $(RCD_DIR)/riscos.mk
 .DEFAULT_GOAL := all
 
 VERSION := 0.2
-TESTSUFFIX := -rc1
+TESTSUFFIX := -rc2
 B := build
 X := $(B)/xrdp
 XRDP_H = $(wildcard $(X)/common/*.h $(X)/libxrdp/*.h)
@@ -22,7 +22,7 @@ MO := $(B)/module
 XRDP_SRC := $(wildcard $(X)/libxrdp/*.c) \
   $(addprefix $(X)/common/,parse.c list.c list16.c log.c trans.c string_calls.c \
                             file.c fifo.c pixman-region16.c base64.c guid.c)
-OUR_SRC := src/server.c src/srvthread.c src/input.c src/auth.c src/capture.c src/pixels.c src/keymap.c src/sound.c \
+OUR_SRC := src/server.c src/xrdp_peek.c src/srvthread.c src/input.c src/auth.c src/capture.c src/pointer.c src/login.c src/font8x8.c src/kbdlayout.c src/pixels.c src/keymap.c src/sound.c src/encspeed.c \
            src/keygen.c src/os_calls.c src/ssl_calls.c src/main.c src/coro_ucontext.c
 MBED_SRC := $(filter-out %/entropy_poll.c %/net_sockets.c %/timing.c,$(wildcard $(M)/library/*.c))
 
@@ -97,10 +97,10 @@ MOD_CFLAGS := -O2 -march=armv7-a -mfloat-abi=soft -mno-unaligned-access -fno-pic
   -mword-relocations -fstack-clash-protection -ffunction-sections -fdata-sections \
   -fno-common -fno-unwind-tables -fno-asynchronous-unwind-tables -DRDPS_MODULE \
   -ffile-prefix-map=$(CURDIR)=rdpserver $(INC)
-MOD_OUR := server.c srvthread.c input.c auth.c capture.c pixels.c keymap.c sound.c os_calls.c \
+MOD_OUR := server.c xrdp_peek.c srvthread.c input.c auth.c capture.c pointer.c login.c font8x8.c kbdlayout.c pixels.c keymap.c sound.c encspeed.c os_calls.c \
            ssl_calls.c plat_riscos.c
 MOD_OBJ := $(patsubst %.c,$(MO)/%.o,$(notdir $(XRDP_SRC) $(MOD_OUR))) \
-           $(MO)/module.o $(MO)/libc.o $(MO)/fmt.o $(MO)/header.o $(MO)/coro_arm.o $(MO)/clickup.o \
+           $(MO)/module.o $(MO)/libc.o $(MO)/fmt.o $(MO)/header.o $(MO)/coro_arm.o $(MO)/clickup.o $(MO)/scrcopy.o \
            $(MO)/sndcap.o
 MOD_MBED := $(patsubst %.c,$(MO)/mbed/%.o,$(notdir $(MBED_SRC)))
 LIBGCC = $(shell $(RO_CC) -print-libgcc-file-name)
@@ -180,8 +180,9 @@ $(QO)/rdpserver: $(QO_OBJ) $(QO)/libmbedcrypto.a
 
 # --- tests -------------------------------------------------------------------
 T := $(B)/tests
-UNIT_SRC := tests/test_units.c src/input.c src/auth.c src/pixels.c src/capture.c src/keymap.c src/keygen.c \
-            src/ssl_calls.c src/os_calls.c src/coro_ucontext.c tests/thread_stubs.c
+UNIT_SRC := tests/test_units.c src/input.c src/auth.c src/pixels.c src/capture.c src/pointer.c src/login.c src/font8x8.c src/kbdlayout.c src/keymap.c src/keygen.c \
+            src/ssl_calls.c src/os_calls.c src/coro_ucontext.c tests/thread_stubs.c \
+            $(X)/common/log.c $(X)/common/string_calls.c $(X)/common/list.c $(X)/common/file.c
 
 check: checks test-units test-units-qemu test-fake test-fake-wimp test-fake-modclient test-emu test-mod-fmt test-module
 
@@ -225,8 +226,9 @@ test-module: $(MO)/RDPServer,ffa $(T)/keys/rsakeys.ini
 	python3 tests/test_module.py $(MO)/RDPServer,ffa $(T)/keys
 
 # The click-release routines in the Unicorn emulator (pip install unicorn).
-test-emu: $(RO)/clickup.o
+test-emu: $(RO)/clickup.o $(MO)/scrcopy.o
 	python3 tests/test_clickup.py $(RO)/clickup.o
+	python3 tests/test_scrcopy.py $(MO)/scrcopy.o
 
 clean:
 	rm -rf $(RO) $(HO) $(QO) $(MO) $(B)/app $(B)/*.zip $(B)/tests

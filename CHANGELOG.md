@@ -1,5 +1,108 @@
 # Changelog
 
+## RDPServer 0.2-rc2 (15 October 2026)
+
+Security
+- TLS 1.2 for clients that ask for it (Windows App, mstsc, FreeRDP and
+  rdesktop all do by default), from Mbed TLS built into the module:
+  ECDHE-RSA key exchange with ChaCha20-Poly1305, AES-GCM or AES-CBC.
+  Clients that don't ask still get Standard RDP Security (RC4).
+  - A self-signed certificate is made once from the server's key
+    (Choices:RDPServer.key.pem and cert.pem); its SHA-1 and SHA-256
+    fingerprints are in the Log and Status window, and !Help says how
+    to check them against what a client shows.
+  - Choices: "Only allow TLS connections (refuse RC4)", off to start
+    with. A client that doesn't ask for TLS is then told the server
+    requires it.
+  - The Log says which security each client got.
+- A login screen. Clients that can't send a user name and password
+  (Windows' Remote Desktop Connection has no way to ask for one) were
+  just turned away. Now a client without the right login gets a page
+  drawn by RDPServer, with user name and password fields, instead of
+  the desktop. Nothing of the RISC OS screen is read or sent, and
+  nothing typed there reaches RISC OS, until the login is right. A
+  wrong password pauses 3 s; after 5 tries, or 2 minutes, the client is
+  disconnected. The page types with RISC OS's keyboard layout (UK, USA,
+  Germany, France and the Netherlands built in). A password with
+  accents set in Choices now matches what the client sends.
+
+Connections
+- After a lost connection (a client that went without closing it: a
+  mode change on the client, or that computer sleeping), RDPServer
+  still thought it was connected and refused every new connection. Now
+  a new connection is held for a few seconds while the connected client
+  is checked; if it doesn't answer, it's dropped and the new one comes
+  in.
+- Keep-alive for TLS clients that take it: a heartbeat every 5 s, so the
+  client notices if this computer stops answering and reconnects by
+  itself, and network checks, so a client that has silently gone is
+  dropped. xrdp.ini keepalive=false turns it off.
+- Networking could stop altogether: each client's socket asked for a
+  256 KB send buffer, held in the network stack's shared mbufs, and a
+  slow client could use them up (MbufManager). Now 64 KB; more waits in
+  RDPServer's own memory. *Set RDPServer$SendBuffer chooses another size.
+- A client that takes nothing for a minute (a RISC OS client whose
+  program stopped) is disconnected, and a new connection takes its
+  place.
+- Shutting down the desktop from a client dropped the connection, so
+  Restart couldn't be clicked. Now the server carries on through the
+  shutdown (quitting !RDPServer itself still stops it). Clicking Restart
+  sends the client a "RISC OS is restarting" page, then the click goes
+  to RISC OS and the connection is closed. A client that reconnects by
+  itself shows the page until the computer is back, then connects again
+  if !RDPServer starts with RISC OS. If no restart follows within 5 s,
+  the session ends and the client can connect again. A reset from Break
+  sends the page too.
+
+Screen
+- Every RISC OS colour mode can be shared. Only some 16 and 32 bpp modes
+  worked, and a 256-colour mode ended the session and kept clients out
+  until the mode changed back. Now 2, 4, 16 and 256 colours (through
+  the screen's palette, followed when a program changes it), 4096, 32K,
+  64K and 16M colours, in RGB or BGR order.
+- No mouse pointer with RDPClient and other rdesktop-based clients: the
+  server never sent a pointer shape. It now sends one.
+- Faster:
+  - The screen was read a word at a time; it's now read eight words at
+    a time (the module's memcpy too, for aligned runs), about five
+    times faster on a Pi 4.
+  - Each pass reads 1 row in 8, a different row each pass, and the
+    whole 64 x 64 tile where one has changed; a pass every 5 cs while
+    things change, however often the server gets a turn.
+  - Only the changed part of each tile is sent, not all of it.
+  - Areas of one colour go as fills to clients that take them (at 32
+    bpp, only to RDP 10 clients, as older ones swap red and blue).
+  - Bulk compression only for clients that can expand it: a client that
+    takes only RDP 4's type got updates it couldn't read.
+  - Fewer memory claims per tile; the module's memcmp and memset work in
+    words.
+- The Log gives figures for finding what's slow: at start-up how fast
+  this computer encrypts, reads the screen and encodes; every 5 s what
+  was sent and read and how long a pass took; with -v, anything that
+  holds the computer up for 10 cs or more.
+
+Input
+- Characters that clients send as characters rather than keys (Windows
+  App on a Mac, on-screen keyboards, input methods) were dropped, so
+  only some characters appeared when typing. They're now typed, in RISC
+  OS's alphabet (Latin1, UTF8 or Latin9; any other, ASCII only).
+- Settings for comparing click handling: RDPServer$ClickTime (how long
+  a click holds the button, 2 to 50 cs; 6) and RDPServer$Clicks 0
+  (buttons go down and up exactly as the client sends them).
+
+Sound and the front end
+- Sound to the client is a choice in Choices, off to start with (it was
+  always sent). Turning it off stops it at once.
+- The Status window shows the connection: the client's address and
+  computer name, the user, how long it's been connected, its RDP
+  version, the security, the screen mode and the client's colour depth,
+  keep-alive, sound and what's been sent.
+
+Other
+- Settings for comparing: RDPServer$Fills, $BulkCompress, $ScreenCopy,
+  $SampleRows and $ScanRows (see !Help).
+- The module is 0.25 (interface 6); the front end and module must match.
+
 ## RDPServer 0.2-rc1 (14 October 2026)
 
 Release candidate: test13 with its documentation made ready for other
@@ -14,13 +117,13 @@ people to try. The server and module are the same as test13 (module
   "Reporting problems" section (which logs to send, and the GitHub
   issues page).
 - One client at a time is described as what it is, not as something
-  still to do: RISC OS has one desktop and one user (owner).
+  still to do: RISC OS has one desktop and one user.
 - README: brought up to date (it still described 0.2-test1).
 
 ## RDPServer 0.2-test13 (14 October 2026)
 
-- Sound now reaches the client from any player (owner: "no sound" with
-  Windows App on test12). test12's log showed the client agreeing the
+- Sound now reaches the client from any player (no sound with Windows
+  App on test12). test12's log showed the client agreeing the
   format and the training round trip, then no sound blocks at all: the
   SharedSound "process" handler it used only sees what SharedSound's
   callback handlers make (SharedSound calls process handlers on a
@@ -44,15 +147,14 @@ people to try. The server and module are the same as test13 (module
   find the next problem quickly.
 - The front end's version now comes from the Makefile (test11 and 12
   said "0.2-test10" in the log).
-- Second-opinion review of the new capture: no crash-class findings; its
-  suggestions (8-byte stack alignment, keep handler in the RMA, free the
-  copy only when nothing can call it, better log) are in.
+- Also: 8-byte stack alignment in the capture, the handler kept in the
+  RMA, the copy freed only when nothing can call it, and a better log.
 - The module is 0.13.
 
 ## RDPServer 0.2-test12 (14 October 2026)
 
 - test11 wouldn't start: "The RDPServer module loaded is a different
-  version", even after *RMKill (owner). Its front end had been built a
+  version", even after *RMKill. Its front end had been built a
   minute before the module interface went to version 2, and the Makefile
   didn't rebuild the front end when the module's headers (src/mod/*.h)
   changed, so the zip paired a version 1 front end with a version 2
@@ -65,22 +167,21 @@ people to try. The server and module are the same as test13 (module
 
 ## RDPServer 0.2-test11 (14 October 2026)
 
-- Sound to the client (owner: "I want to look at piping the audio to
-  the client"). What RISC OS plays (a SharedSound process handler in the
-  module, so it hears everything mixed) goes to the client over RDP's
-  audio output channel (RDPSND): 16-bit stereo PCM at the computer's
-  sample rate, in 40 ms blocks. Clients that ask for sound get it
-  (Windows App, mstsc, FreeRDP; rdesktop with -r sound). Tested with
-  FreeRDP; Windows App not yet.
+- Sound to the client. What RISC OS plays (a SharedSound process handler
+  in the module, so it hears everything mixed) goes to the client over
+  RDP's audio output channel (RDPSND): 16-bit stereo PCM at the
+  computer's sample rate, in 40 ms blocks. Clients that ask for sound
+  get it (Windows App, mstsc, FreeRDP; rdesktop with -r sound). Tested
+  with FreeRDP; Windows App not yet.
 - Choices has a new option, "Mute this computer while a client listens"
-  (owner's choice: keep playing, with an option to mute). It takes effect
+  (it keeps playing otherwise). It takes effect
   at once, also mid-session, and is kept in Choices:RDPServer.Settings
   (`mute_local 1`). The command-line server has `-m` for the same.
 - xrdp.ini: `allow_channels=true` (needed for rdpsnd).
 - The module's interface is version 2 (a new entry, SET_MUTE, and the
   option in the start options); the front end and module must match, as
   !Run's RMEnsure 0.12 makes sure.
-- Second-opinion review: the handler is now removed if the module dies or
+- Also fixed: the handler is now removed if the module dies or
   is killed with the server still running; a resize no longer starts the
   sound over; sound carries on while the client is minimised; latency is
   capped after a stall; a sample rate change is noticed; stricter
@@ -90,7 +191,7 @@ people to try. The server and module are the same as test13 (module
 ## RDPServer 0.2-test10 (14 October 2026)
 
 - Clients reconnect by themselves after the server restarts ([MS-RDPBCGR]
-  automatic reconnection; owner: "can we auto reconnect?"). Once a
+  automatic reconnection). Once a
   client is up, the server gives it a cookie (a logon id and 16 random
   bytes). When the safety net restarts the server, it now cuts the
   client's connection with a reset instead of closing it, which clients
@@ -111,7 +212,7 @@ people to try. The server and module are the same as test13 (module
 - libxrdp patch 0004: the server's General Capability Set says
   AUTORECONNECT_SUPPORTED, and the client's auto-reconnect cookie and
   client random are kept in client_info.
-- Second-opinion review: cookie lifetime (now 2 minutes after the end),
+- Also fixed: cookie lifetime (now 2 minutes after the end),
   SO_LINGER only on a socket the module still owns, constant-time
   compare. All fixed.
 - The Makefile now rebuilds everything when xrdp's headers change (a
@@ -122,13 +223,13 @@ people to try. The server and module are the same as test13 (module
 ## RDPServer 0.2-test9 (14 October 2026)
 
 - Back to test5's speed: the first desktop appears at once again. The
-  server thread runs in USR mode again. test8's measurements (owner)
-  showed the processor equally fast in SVC, SYS and USR mode, but in SYS
-  mode (test6 to test8) the first desktop waited 10 s to go out (0 scans
-  in the first 10 s), against at once in USR mode. The Internet module does its TCP work in
-  transient callbacks, which the kernel runs on returns to USR mode, also
-  inside the server's turn; in SYS mode they waited until the turn
-  ended.
+  server thread runs in USR mode again. test8's measurements showed the
+  processor equally fast in SVC, SYS and USR mode, but in SYS mode
+  (test6 to test8) the first desktop waited 10 s to go out (0 scans in
+  the first 10 s), against at once in USR mode. The Internet module does
+  its TCP work in transient callbacks, which the kernel runs on returns
+  to USR mode, also inside the server's turn; in SYS mode they waited
+  until the turn ended.
 - A program stopped with Alt-Break while the server is in the middle of
   its turn can still throw the turn away (that was test5's problem): the
   safety net from test6 now notices and starts the server again ("the
@@ -145,8 +246,8 @@ people to try. The server and module are the same as test13 (module
 ## RDPServer 0.2-test8 (14 October 2026)
 
 A test build to find out why the server's own work is slower since
-test6. test7's Log (owner: the first desktop still appears in stripes,
-"on test 5 it was just there") shows the RSA step at 17 cs, against 5 cs
+test6. test7's Log (the first desktop still appears in stripes, where in
+test5 it appeared at once) shows the RSA step at 17 cs, against 5 cs
 in test5: that's pure arithmetic, almost no SWIs, so the slowdown isn't
 only the network or SWIs. The first full picture took 84 cs of work
 against 32 cs. The only difference is the thread's processor mode: SYS
@@ -167,8 +268,8 @@ since test6, USR before.
 
 ## RDPServer 0.2-test7 (14 October 2026)
 
-- Redraws on the client were slower in 0.2-test6 than in test5 (owner,
-  with both Logs: in test6, while the screen changed, many scans waited
+- Redraws on the client were slower in 0.2-test6 than in test5 (the
+  Logs: in test6, while the screen changed, many scans waited
   for the client to catch up and steps took up to 8 cs; in test5 almost
   none waited). The Internet module does its TCP work (taking in the
   client's ACKs, sending what's queued) in transient callbacks. With the
@@ -191,8 +292,8 @@ since test6, USR before.
 ## RDPServer 0.2-test6 (14 October 2026)
 
 - The server stopped for good when a program that had run away was
-  stopped with Alt-Break (owner, 14 Oct, Folio 0.0.1-test37 in a runaway
-  drag; the Log just ends). The server thread ran in USR mode, and RISC
+  stopped with Alt-Break (a program in a runaway drag; the Log just
+  ends). The server thread ran in USR mode, and RISC
   OS runs transient callbacks on every return to USR mode, so they came
   inside the thread, in whatever task was current: with a program
   hogging the machine, that was nearly always that program, and the stop
@@ -214,8 +315,7 @@ since test6, USR before.
 
 ## RDPServer 0.2-test5 (13 October 2026)
 
-- The client flashed at every screen mode change (owner: "the flicker
-  coincided exactly with ... mode change"). Resizing the client's
+- The client flashed at every screen mode change. Resizing the client's
   desktop is the protocol's deactivation-reactivation, and the client
   tears its window down and builds it again. A mode change at the same
   size (other colours, another line length) no longer resizes the
@@ -413,7 +513,7 @@ since test6, USR before.
 - Icon bar icon (a different picture while a client is connected); menu
   with Info, Status..., Choices..., Disconnect, Quit. Status shows the
   state, the client, and the last messages. Choices sets the port and the
-  user name and password (Save, Clear login), as asked for in test2.
+  user name and password (Save, Clear login).
 - The screen is read 128 rows per step on the desktop, the scan period is
   10 cs while things change and 25 cs after 2 s without a change, and a
   client gets 10 s to finish connecting (the desktop waits meanwhile).
@@ -446,9 +546,10 @@ since test6, USR before.
 
 ## RDPServer 0.1-test1 (13 October 2026)
 
-- First test build. xrdp 0.10.6.1's libxrdp with new `os_calls`/`ssl_calls`
-  for UnixLib (crypto from Mbed TLS 3.6.7; RC4 written here). Standard RDP
-  Security, 2048-bit key made on first run (Choices:RDPServer.rsakeys/ini).
+- First test build. xrdp 0.10.6.1's libxrdp with new
+  `os_calls`/`ssl_calls` for UnixLib (crypto from Mbed TLS 3.6.7; RC4
+  written here). Standard RDP Security, 2048-bit key made on first run
+  (Choices:RDPServer.rsakeys/ini).
 - Patches to libxrdp: the desktop is the RISC OS screen's size (0001);
   salted MACs, which FreeRDP sends by default (0002); no Cache Color Table
   order with the 8 bpp palette, which FreeRDP 3 rejects (0003).
@@ -482,3 +583,4 @@ since test6, USR before.
   memory, memory to memory, comparing the screen with a copy, and a 64x64
   tile scan; with `-p`, moves the mouse with OS_Word 21 and checks the
   pointer follows, then puts it back. Not yet run on RISC OS.
+

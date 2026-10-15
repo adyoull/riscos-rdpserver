@@ -169,7 +169,7 @@ class RiscOS:
         self.wheel = []
         self.vars = {}
         self.redirect = 0       # this many screen reads see a sprite
-        self.sndbuf_max = 128 * 1024  # the stack's SO_SNDBUF limit (pretend)
+        self.sndbuf_max = 48 * 1024  # the stack's SO_SNDBUF limit (pretend)
         self.sndbuf = 0          # the client socket's, as set
         self.kill_armed = False  # stop "the task" at a USR return in the thread
         self.unwind_next = False  # throw away the thread at its next SWI
@@ -181,6 +181,7 @@ class RiscOS:
         self.alive_tasks = set()
         self.errorbox = False
         self.swilog = []
+        self.typed = []           # characters put in the keyboard buffer (OS_Byte 138)
         self.fatal = None
         # SharedSound: handlers, and a pretend 48 kHz stream through them
         self.snd_handlers = {}   # handle -> (addr, param, type)
@@ -528,7 +529,8 @@ class RiscOS:
         self.swilog.append(name)
         if len(self.swilog) > 2000:
             del self.swilog[:1000]
-        if n in (SWI["OS_EnterOS"], SWI["OS_LeaveOS"], SWI["OS_SynchroniseCodeAreas"]):
+        if n in (SWI["OS_EnterOS"], SWI["OS_LeaveOS"], SWI["OS_SynchroniseCodeAreas"],
+                 0x13, 0x14):           # (and OS_IntOn, OS_IntOff)
             return None
         if n == SWI["OS_ReadMonotonicTime"]:
             r[0] = self.cs()
@@ -537,6 +539,23 @@ class RiscOS:
                 r[1] = 0
             elif r[0] == 0x81:
                 r[1], r[2] = 0, 0xFF
+            elif r[0] == 138:
+                # a byte into the keyboard buffer (R1 0)
+                if r[1] != 0:
+                    raise Fatal("OS_Byte 138 into buffer %d" % r[1])
+                self.typed.append(r[2] & 0xFF)
+            elif r[0] == 128:
+                # bytes in the keyboard buffer (R1 255): none
+                if r[1] != 255:
+                    raise Fatal("OS_Byte 128 with R1 %d" % r[1])
+                r[1], r[2] = 0, 0
+            elif r[0] == 71 and r[1] == 127:
+                r[1] = 101                  # the alphabet: Latin1
+            elif r[0] == 71:
+                # the keyboard layout number: read only (R1 255), the UK
+                if r[1] != 255:
+                    raise Fatal("OS_Byte 71 with R1 %d: only reading is expected" % r[1])
+                r[1] = 1
             else:
                 raise Fatal("OS_Byte %d" % r[0])
         elif n == SWI["OS_Word"]:

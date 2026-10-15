@@ -34,4 +34,9 @@ int auth_check (const auth_db *db, const char *name, const char *password);
 /* Writes a file with just this login (a new random salt). 0 = done. */
 int auth_set (const char *file, const char *name, const char *password);
 
+/* A UTF-8 string (as RDP clients send the user name and password) to
+   Latin-1 (as RISC OS types them), in place, if every character is in
+   Latin-1; else it's left as it was. */
+void auth_utf8_to_latin1 (char *s);
+
 #endif

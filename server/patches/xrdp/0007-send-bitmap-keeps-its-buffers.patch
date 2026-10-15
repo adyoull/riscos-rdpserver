@@ -1,0 +1,55 @@
+--- a/libxrdp/libxrdp.c	2026-10-15 07:52:29.514144610 +0100
++++ b/libxrdp/libxrdp.c	2026-10-15 07:52:29.532743409 +0100
+@@ -424,6 +424,12 @@
+     struct stream *s = (struct stream *)NULL;
+     struct stream *temp_s = (struct stream *)NULL;
+     tui32 pixel;
++    /* RDPServer: the two streams are kept from one call to the next
++       (RISC OS: each allocation is an OS_Heap SWI, four a 64x64 tile). The
++       server is single-threaded, and each call sends what it makes before
++       it returns. */
++    static struct stream *keep_s = (struct stream *)NULL;
++    static struct stream *keep_temp_s = (struct stream *)NULL;
+ 
+     LOG_DEVEL(LOG_LEVEL_DEBUG, "libxrdp_send_bitmap: sending bitmap");
+     Bpp = (bpp + 7) / 8;
+@@ -447,13 +453,21 @@
+ 
+     LOG_DEVEL(LOG_LEVEL_DEBUG, "libxrdp_send_bitmap: bpp %d Bpp %d line_bytes %d "
+               "server_line_bytes %d", bpp, Bpp, line_bytes, server_line_bytes);
+-    make_stream(s);
++    if (keep_s == NULL)
++    {
++        make_stream(keep_s);
++    }
++    s = keep_s;
+     init_stream(s, MAX_BITMAP_BUF_SIZE);
+ 
+     if (session->client_info->use_bitmap_comp)
+     {
+         LOG_DEVEL(LOG_LEVEL_DEBUG, "libxrdp_send_bitmap: compression");
+-        make_stream(temp_s);
++        if (keep_temp_s == NULL)
++        {
++            make_stream(keep_temp_s);
++        }
++        temp_s = keep_temp_s;
+         init_stream(temp_s, 65536);
+         i = 0;
+ 
+@@ -587,7 +601,6 @@
+             }
+         }
+ 
+-        free_stream(temp_s);
+     }
+     else
+     {
+@@ -692,7 +705,6 @@
+         }
+     }
+ 
+-    free_stream(s);
+     return 0;
+ }
+ 

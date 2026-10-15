@@ -29,11 +29,15 @@ It includes:
 - libxrdp and parts of common/ from xrdp 0.10.6.1
   (https://github.com/neutrinolabs/xrdp), Copyright (C) Jay Sorg and the
   xrdp developers, under the Apache License 2.0 (below). RDPServer
-  changes three files (xrdp_sec.c, libxrdp.c, libxrdp.h): the changes are
-  in patches/xrdp in RDPServer's source.
-- The crypto part of Mbed TLS 3.6.7 (https://github.com/Mbed-TLS/mbedtls),
-  Copyright The Mbed TLS Contributors, under the Apache License 2.0
-  (below; Mbed TLS is also offered under GPL-2.0-or-later).
+  changes some of its files: the changes are in patches/xrdp in
+  RDPServer's source.
+- Mbed TLS 3.6.7 (https://github.com/Mbed-TLS/mbedtls): its crypto, TLS
+  1.2 server and X.509 parts, Copyright The Mbed TLS Contributors, under
+  the Apache License 2.0 (below; Mbed TLS is also offered under
+  GPL-2.0-or-later).
+- The login screen's 8x8 font, from font8x8 by Daniel Hepper
+  (https://github.com/dhepper/font8x8), based on Marcel Sondaar's and
+  IBM's VGA fonts: public domain.
 
 --------------------------------------------------------------------------
 

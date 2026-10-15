@@ -117,3 +117,28 @@ auth_set (const char *file, const char *name, const char *password)
   fprintf (f, "%s %s %s\n", name, shex, hhex);
   return fclose (f) != 0 ? -1 : 0;
 }
+
+/* A UTF-8 string to Latin-1, in place, if every character is in Latin-1
+   (else it's left as it was). */
+void
+auth_utf8_to_latin1 (char *str)
+{
+  unsigned char *s = (unsigned char *) str, *d = s;
+  const unsigned char *p = s;
+  for (; *p; p++)
+    if (*p >= 0x80)
+      {
+        if ((*p & 0xFE) != 0xC2 || (p[1] & 0xC0) != 0x80)
+          return;               /* not Latin-1, or not UTF-8 */
+        p++;
+      }
+  for (p = s; *p; p++)
+    if (*p >= 0x80)
+      {
+        *d++ = (unsigned char) (((p[0] & 0x03) << 6) | (p[1] & 0x3F));
+        p++;
+      }
+    else
+      *d++ = *p;
+  *d = 0;
+}

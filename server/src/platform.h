@@ -32,12 +32,29 @@ typedef struct
    Variables will also reflect the change"), and redirected is set. */
 const char *plat_screen (rdps_screen *s);
 
+/* The current mode's palette (2 to 256 colour modes): the entries as
+   0x00RRGGBB in rgb. Returns how many (0 if it can't be read). Only
+   meaningful while output isn't redirected (a sprite's palette then). */
+int plat_palette (uint32_t rgb[256]);
+
+/* A system variable's value as a number (def if it isn't set). */
+int plat_var_int (const char *name, int def);
+
+/* The RISC OS keyboard layout number (OS_Byte 71: 1 UK, 48 USA...), or
+   0 if it can't be read. */
+int plat_keyboard (void);
+
 /* Moves the mouse to pixel (x, y), top-left origin, on screen s. */
 void plat_mouse_to (const rdps_screen *s, int x, int y);
 
 /* Presses (down = 1) or releases a key or mouse button, by RISC OS
    low-level internal key number (PRM p1247; mouse buttons &70-&72). */
 void plat_key (int low_level_key, int down);
+/* Puts a byte (in RISC OS's alphabet) into the keyboard buffer, as if
+   typed: 0, or -1 if there isn't room. */
+int plat_char (int c);
+/* RISC OS's alphabet number (OS_Byte 71, 127: 101 Latin1, 111 UTF8). */
+int plat_alphabet (void);
 
 /* A click: presses mouse button ll now, and lets go of it after
    up_after_cs from a ticker event, so the release happens even if another

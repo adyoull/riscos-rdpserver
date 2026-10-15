@@ -1,4 +1,4 @@
-RDPServer 0.2-rc1 (release candidate)
+RDPServer 0.2-rc2 (release candidate)
 =====================================
 
 Lets you use this RISC OS desktop from another computer with Remote
@@ -6,13 +6,15 @@ Desktop: Windows' Remote Desktop Connection (mstsc), Microsoft's Windows
 App on macOS, iOS and Android, FreeRDP or Remmina on Linux, and
 !RDPClient on another RISC OS machine.
 
-FOR YOUR OWN NETWORK ONLY. Its connections use RDP's older built-in
-encryption (RC4), not TLS. Run it on your own network, behind your
-router; never make port 3389 reachable from the internet. Set a login
-(below) before you use it.
+FOR YOUR OWN NETWORK. Clients that ask for it (all the usual ones do)
+get TLS 1.2, as from a Windows server; older clients get RDP's own
+encryption (RC4), which is weak. Keep it behind your router, never make
+port 3389 reachable from the internet, and set a login (below) before
+you use it.
 
-Needs: SharedUnixLibrary, ARMEABISupport and CryptRandom (PackMan), and a
-desktop mode with thousands or millions of colours (16 or 32 bpp).
+Needs: SharedUnixLibrary, ARMEABISupport and CryptRandom (PackMan). Any
+desktop mode can be shared: 2, 4, 16 or 256 colours, 4096, thousands
+or millions (16 million is the quickest).
 
 Using it
 --------
@@ -21,13 +23,30 @@ listens on port 3389. The first time, it makes this computer's key
 (stored in Choices:RDPServer); that can take a minute, with the
 hourglass showing. The icon changes while a client is connected.
 
-  Select on the icon   the Status window: what it's doing, who's
-                       connected, and its last few messages
+  Select on the icon   the Status window: what it's doing; the client
+                       (its address and computer name), the user, how
+                       long it's been connected, its RDP version, the
+                       security (TLS and cipher, or RC4), the screen
+                       mode and the client's colour depth, keep-alive,
+                       sound and what's been sent; and the last few
+                       messages
   Adjust on the icon   Choices
   Menu on the icon     Info, Status..., Choices..., Disconnect, Quit
 
 It uses almost no time while nothing is happening; while a client is
-connected it looks for changes on the screen ten times a second.
+connected it looks for changes on the screen twenty times a second.
+
+When the desktop shuts down, the server carries on (with no icon on the
+icon bar), so a client stays connected and can click Restart in the
+box that follows. Quitting !RDPServer itself stops it. When the computer
+restarts, the client is shown "RISC OS is restarting" and the connection
+is dropped as if the network had gone (once the desktop has shut down, a
+click or Return from the client sends that page first, then the click: it
+may be the Restart button; if no restart follows within 5 s, the client
+can connect again): a client that reconnects by
+itself (Windows App, Remote Desktop Connection, FreeRDP with
+/auto-reconnect) connects again once the computer is back, if !RDPServer
+starts with it (add it to Boot's Run list in !Configure).
 
 The server itself is a module (RDPSMod, which !Run loads and Quit
 removes), so it goes on working when the desktop doesn't multitask:
@@ -57,22 +76,39 @@ Choices, type a user name and a password and click Save (or press
 Return). Clients must then give them. To change the password, type a new
 one; to let anyone connect again, click Clear login (it takes effect
 straight away). The password isn't stored, only a salted SHA-256 of it
-(Choices:RDPServer.logins). After a wrong password, new connections are
-turned away for 3 seconds.
+(Choices:RDPServer.logins).
+
+A client that doesn't send the user name and password (Windows' Remote
+Desktop Connection, say, which doesn't ask for them for this kind of
+server), or sends a wrong one, gets a login screen instead of the
+desktop: nothing of the RISC OS screen is shown, and what's typed there
+goes nowhere else. Type the user name and password and press Return (or
+click Log in). It types with this computer's keyboard layout (UK, USA,
+Germany, France and the Netherlands are known; for others, the client's
+layout if it's one of those, else USA; the Log says which), and accent
+keys that wait for the next key don't work there. After a wrong
+password it waits 3 seconds; after 5, or 2 minutes without logging in,
+the client is disconnected, and new connections are turned away for 3
+seconds.
 
 Choices also sets the port. Changing it disconnects a connected client.
 
 Sound
 -----
-What this computer plays goes to the client too, if the client asks for
-sound (Windows App, Remote Desktop Connection and FreeRDP do by default;
-rdesktop only with -r sound). It's sent as it is, 16-bit stereo at the
+What this computer plays can go to the client too: tick "Send this
+computer's sound to the client" in Choices (it's off to start with, also
+after updating from an earlier version that sent it without asking). The
+client must ask for sound as well (Windows App, Remote Desktop Connection
+and FreeRDP do by default; rdesktop only with -r sound). Turning it off
+stops the sound at once; turning it on takes effect from the next client
+(also for the one connected, if it had sound and Choices stopped it).
+It's sent as it is, 16-bit stereo at the
 computer's own sample rate (about 1.5 Mbit/s at 48 kHz), so it suits a
 home network better than the internet. It reaches the client about a
 third of a second late.
 
-The computer goes on playing it too, unless you tick "Mute this computer
-while a client listens" in Choices: it's then silent while a client
+The computer goes on playing it too, unless you also tick "Mute this
+computer while a client listens" in Choices: it's then silent while a client
 listens, and plays again when the client goes. The choice takes effect
 at once, also while a client is connected.
 
@@ -83,16 +119,56 @@ Connecting
 ----------
 On the other computer, connect to this computer's IP address:
   Windows:   mstsc /v:192.168.1.50
-             (if it asks, choose to connect anyway: the server's
-             identity can't be checked without TLS)
-  FreeRDP:   xfreerdp3 /v:192.168.1.50 /sec:rdp
+  FreeRDP:   xfreerdp3 /v:192.168.1.50
   RDPClient: as for any server
+
+The first time, the client says it can't verify this computer's
+certificate. That's expected: RDPServer makes its own (it isn't signed by
+anyone the client knows). Before you accept it, check that it's this
+computer's: the client can show the certificate's fingerprint (Windows
+calls it the thumbprint), and RDPServer's Status window and Log show it
+when it starts ("TLS on: certificate SHA-1 ..." and "SHA-256 ..."). If
+they match, accept it and tick "don't ask again"; from then on the client
+warns only if something else answers in this computer's place.
+
+To refuse clients that don't use TLS, tick "Only allow TLS connections"
+in Choices (from the next client on). A refused client is told the
+server requires TLS, and the Log says "refused: it didn't ask for TLS".
+Leave it off if you use an old client that can't do TLS 1.2 (an
+unpatched Windows 7, say).
+
+The certificate is made once, from this computer's key, as
+Choices:RDPServer.cert.pem and key.pem. Delete both and RDPServer makes
+a new one (clients then ask again). With neither, or if a client
+doesn't ask for TLS, the connection uses RC4; the Log says which
+("security: ...").
 
 The client gets the RISC OS screen at its own size. Mouse: left is
 Select, middle is Menu, right is Adjust; the scroll wheel works where a
 local USB mouse's wheel does. The keyboard works by key position, with
-RISC OS's keyboard layout. Keys go to whichever window has the input
-focus on RISC OS.
+RISC OS's keyboard layout. Some clients send some or all characters as
+the characters themselves instead (Windows App on a Mac, on-screen
+keyboards, input methods): those are typed as they are, if RISC OS's
+alphabet has them. Keys go to whichever window has the input focus on
+RISC OS.
+
+If the connection is lost
+--------------------------
+One client at a time can be connected. If a client goes without closing
+its connection (that computer went to sleep, or off the network), a new
+connection is held for a few seconds while RDPServer checks the one
+that's there: if it doesn't answer, it's dropped and the new one comes
+in; if it does, the new one is refused ("refused ...: the client that's
+connected is still there" in the Log). Clients that use TLS and take
+"heartbeats" (Windows App, mstsc and FreeRDP do) are also sent one every
+5 seconds: if they stop coming (this computer hung, say), the client
+warns after 15 seconds and connects again by itself after 30. The Log
+says what each client takes ("keep-alive: ..."). rdesktop and RDPClient
+take neither, so for them only the check above applies: the whole
+screen is sent again, and if none of it is taken the new connection
+comes in. Any client that takes nothing for a minute while there's
+something waiting to go to it is disconnected (its program has stopped
+but its connection hasn't closed, as a RISC OS client's can).
 
 It writes a log, Choices:RDPServer.Log (and libxrdp's own, XrdpLog):
 connections, sound, every mouse button and wheel event, and Shift, Ctrl
@@ -105,13 +181,16 @@ reach the Filer as double-clicks.
 
 What isn't done yet
 -------------------
-- TLS (needs AcornSSL to work as a server).
+- NLA (Windows' "network level authentication"): a client set to
+  require it won't connect. Windows App and mstsc don't by default.
 - Only changed areas are sent, but there's no bitmap cache yet, and no
   quick handling of window moves and scrolling.
 - The clipboard, and file or printer sharing.
 - H.264: video is sent as ordinary screen updates, so it uses a lot of
   the network and isn't smooth at large sizes.
-- The pointer shape: the client shows its own arrow.
+- The pointer shape: the client shows a plain arrow (sent by RDPServer,
+  so clients such as RDPClient show one too), not RISC OS's own pointer.
+- RDP 4 clients (RDPClient with its "RDP4" option ticked) can't connect.
 - Video and 3D shown in a hardware overlay (VideoOverlay, and EGL
   programs such as Reel, ReelEGL and Mesa games) appear on the client as
   a black window: the GPU draws overlays straight to the display, so they
@@ -126,6 +205,48 @@ What isn't done yet
   colours, say) doesn't resize it, so doesn't flash. A client that
   can't be resized (it didn't say it could) is disconnected: connect
   again.
+
+If it's slow
+------------
+The Log says, when RDPServer starts, how fast this computer encrypts
+("TLS here: ..."), and every 5 seconds while a client is connected how
+much it sent ("... KB/s"). The client's connection asks the network
+stack for a 64 KB send buffer; to try another size, *Set
+RDPServer$SendBuffer to it in KB (16 to 1024) and connect again (a big
+one can use up the stack's buffers: see MbufManager).
+
+RDPServer finds what changed by reading the screen. A pass over it takes
+5 cs while things are changing (25 cs once the screen has been still for
+2 seconds), however often RDPServer gets a turn. Each pass reads 1 row in
+8, a different row each time, and where one of those has changed it reads
+the rest of that 64 x 64 area at once: a change 8 rows tall or more is
+found in the pass it happens in, and every row is read once in 8 passes.
+At start-up the Log says how fast the screen can be read ("screen
+read: ..."); the 5-second figures say how long a pass took and how much
+was read.
+
+What changed is sent as compressed 64 x 64 bitmaps, and areas of one
+colour as fills (a few bytes each). At start-up the Log says how long
+this computer takes to encode a whole screen like the middle of the one
+it shows ("encoding here: ..."): converting it to the client's colours,
+compressing it, and bulk compressing (MPPC, when the client asks for it).
+When a client connects, "updates: ..." says which of those it gets.
+While a client is connected, anything that holds this computer up for
+10 cs or more is logged ("slow: ...").
+
+To try other settings, *Set any of these and start RDPServer again:
+  RDPServer$SampleRows   1 row in this many a pass (1, 2, 4, 8 or 16;
+                         1 reads every row, as in 0.2-rc1)
+  RDPServer$ScanRows     the most rows read a turn (0: no limit)
+  RDPServer$ScreenCopy   1 to read the screen a word at a time, 2 eight
+                         words at a time (normally the quicker is used)
+  RDPServer$Fills        0 to send areas of one colour as bitmaps
+  RDPServer$BulkCompress 0 not to bulk compress (MPPC): more to send,
+                         less work here
+  RDPServer$ClickTime    how long a click holds the mouse button down, in
+                         cs (2 to 50; 6)
+  RDPServer$Clicks       0 to send mouse buttons down and up just as the
+                         client does, not as one click
 
 Reporting problems
 ------------------

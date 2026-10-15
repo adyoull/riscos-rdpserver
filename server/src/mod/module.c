@@ -55,6 +55,7 @@ static struct
   unsigned driving_since;                 /* and when (cs) */
   int started;                            /* mod_start succeeded, no stop since */
   int restart;                            /* start again (the thread was lost) */
+  int orphan;                             /* left serving at a desktop shutdown */
   unsigned lost;
   int eager;                              /* the next callback runs the thread, due or not */
   int extra;                              /* extra turns in this burst */
@@ -322,10 +323,63 @@ mod_bytev (void)
   drive ();
 }
 
+/* Service_PreReset: RISC OS is about to reset (Restart after a shutdown,
+   say). The client is sent a page saying so, then the connection is
+   closed as if the network had gone (no Disconnect: then the client
+   reconnects by itself once the computer is back, if RDPServer starts
+   with it). The server's turns are run here, up to a second (or 3000
+   turns, in case the clock isn't running), until the page has gone to
+   the network stack and our side of the connection is shut after it
+   (that it then reaches the client depends on the network driver: it
+   may already have stopped for the reset). Not claimed. (0.2-test24) */
+static void
+prereset (void)
+{
+  unsigned t0, cpsr;
+  int turns, done = 0;
+  if (!m.started || m.dead)
+    return;
+  /* Only from SVC mode with interrupts on (OS_Reset from a program):
+     anything else (from an interrupt, say) and the server isn't run,
+     only the connection closed. Likewise if the server is in the middle
+     of a turn (a reset from inside one: Break from the client). */
+  __asm__ volatile ("mrs %0, cpsr" : "=r" (cpsr));
+  if ((cpsr & 0x1F) != 0x13 || (cpsr & 0x80) || !take ())
+    {
+      rdps_close_all_sockets ();
+      return;
+    }
+  rdps_cmd_restarting ();
+  give ();
+  t0 = plat_time_cs ();
+  for (turns = 0; turns < 3000 && !done && (int) (plat_time_cs () - t0) < 100; turns++)
+    {
+      if (!take ())
+        break;
+      rdps_thread_run ();
+      done = rdps_cmd_restart_done ();
+      give ();
+    }
+  rdps_close_all_sockets ();
+  plat_click_finish ();
+  plat_set_clients (0);
+}
+
 void
 mod_service (int r0, int service, int r2)
 {
-  if (service == 0x57)          /* Service_WimpReportError: 1 opening, 0 closing */
+  if (service == 0x45)          /* Service_PreReset */
+    prereset ();
+  else if (service == 0x80)     /* Service_ShutdownComplete: the Restart box is up */
+    {
+      if (m.started && !m.dead)
+        {
+          rdps_cmd_shutdown_complete ();
+          rdps_console_line ('s', "the desktop has shut down: a click from the client "
+                             "(Restart) gets the restarting page first");
+        }
+    }
+  else if (service == 0x57)     /* Service_WimpReportError: 1 opening, 0 closing */
     mod_errorbox_open = r0 != 0;
   else if (service == 0x53 && r0 == 0 && r2 != 0 && r2 == m.attached_task)
     {
@@ -383,6 +437,13 @@ mod_attach (int task)
       if (rdps_swi (TaskManager_TaskNameFromHandle, r) == NULL)
         return 1;
     }
+  if (m.orphan)
+    {
+      /* left serving by a front end at a shutdown: this one takes over,
+         and starts the server afresh */
+      mod_stop ();
+      m.orphan = 0;
+    }
   m.attached_task = task;
   return 0;
 }
@@ -399,9 +460,18 @@ mod_stop (void)
 }
 
 void
-mod_detach (void)
+mod_detach (int keep)
 {
-  mod_stop ();
+  if (keep && m.started)
+    {
+      /* The desktop is shutting down: serve on with no front end, so a
+         client can still see the screen and click Restart. */
+      m.orphan = 1;
+      rdps_console_line ('s', "the desktop is shutting down: serving on with no "
+                         "!RDPServer, so a client can restart this computer");
+    }
+  else
+    mod_stop ();
   m.attached_task = 0;
 }
 
@@ -431,12 +501,14 @@ mod_start (const rdps_mod_options *o)
   m.opt.address = m.mopt.address;
   m.opt.ini = m.mopt.ini;
   m.opt.logins = m.mopt.logins;
-  m.opt.interval_cs = m.mopt.interval_cs ? m.mopt.interval_cs : 10;
+  m.opt.interval_cs = m.mopt.interval_cs;   /* 0: the server's default */
   m.opt.idle_interval_cs = m.mopt.idle_interval_cs;
   m.opt.handshake_cs = m.mopt.handshake_cs;
   m.opt.rows_per_scan = m.mopt.rows_per_scan;
   m.opt.verbose = m.mopt.verbose;
   m.opt.mute_local = m.mopt.mute_local;
+  m.opt.require_tls = m.mopt.require_tls;
+  m.opt.send_sound = m.mopt.send_sound;
   m.opt.log_file = NULL;               /* libxrdp's log: to the messages */
   {
     /* RDPServer$ThreadMode SYS: the thread in SYS mode, for comparing
@@ -512,6 +584,32 @@ mod_set_mute (int on)
   if (!take ())
     return -1;
   r = rdps_cmd_set_mute (on);
+  give ();
+  return r;
+}
+
+int
+mod_set_sound (int on)
+{
+  int r;
+  m.mopt.send_sound = on != 0;
+  m.opt.send_sound = on != 0;       /* for a restart */
+  if (!take ())
+    return -1;
+  r = rdps_cmd_set_sound (on);
+  give ();
+  return r;
+}
+
+int
+mod_set_require_tls (int on)
+{
+  int r;
+  m.mopt.require_tls = on != 0;
+  m.opt.require_tls = on != 0;      /* for a restart */
+  if (!take ())
+    return -1;
+  r = rdps_cmd_set_require_tls (on);
   give ();
   return r;
 }

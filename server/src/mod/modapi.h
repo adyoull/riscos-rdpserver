@@ -17,14 +17,17 @@
 
 #define RDPS_MOD_TITLE "RDPServer"
 #define RDPS_MOD_MAGIC 0x73504452u        /* "RDPs" */
-#define RDPS_MOD_INTERFACE 2
+#define RDPS_MOD_INTERFACE 6  /* 6: DETACH can leave the server running */
 #define RDPS_MOD_TABLE 0x34
 
 /* The entries, in the table's order. */
 enum
 {
   RDPS_MOD_ATTACH,        /* int (int task): 0, or 1 if another task has it */
-  RDPS_MOD_DETACH,        /* void (void): stops the server too */
+  RDPS_MOD_DETACH,        /* void (int keep): stops the server too, unless
+                             keep: then it carries on without a front end
+                             (the desktop is shutting down: a client can
+                             still use it, to click Restart; 0.2-test23) */
   RDPS_MOD_SET_FILE,      /* int (const char *path, const char *data, int len):
                              a file libxrdp reads, held in memory; data NULL
                              forgets it */
@@ -40,10 +43,15 @@ enum
                              bytes written, updates *seq */
   RDPS_MOD_SET_MUTE,      /* int (int on): mute this computer while a client
                              listens, from now (0.2-test11) */
+  RDPS_MOD_SET_REQUIRE_TLS, /* int (int on): refuse clients that don't use
+                             TLS, from the next one (0.2-test14) */
+  RDPS_MOD_SET_SOUND,     /* int (int on): send this computer's sound to the
+                             client; off stops it now, on is from the next
+                             client (0.2-test22) */
   RDPS_MOD_ENTRIES
 };
 /* The same as a number, for the front end's interface tag (modclient.c) */
-#define RDPS_MOD_ENTRIES_N 10
+#define RDPS_MOD_ENTRIES_N 12
 typedef char rdps_mod_entries_n_check[RDPS_MOD_ENTRIES == RDPS_MOD_ENTRIES_N ? 1 : -1];
 
 typedef struct
@@ -64,6 +72,8 @@ typedef struct
   int rows_per_scan;
   int verbose;
   int mute_local;           /* silence this computer while a client listens */
+  int require_tls;          /* refuse clients that don't use TLS (interface 3) */
+  int send_sound;           /* send the sound to the client (interface 5) */
 } rdps_mod_options;
 
 typedef struct

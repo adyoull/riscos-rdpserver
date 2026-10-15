@@ -2,12 +2,15 @@
    with real RDP clients (rdesktop, FreeRDP) in a container.
 
    The screen is 32 bpp TBGR (as a RISC OS desktop is), 640x480 unless
-   RDPS_HOST_SIZE says otherwise ("WxH"). It shows four coloured quarters
+   RDPS_HOST_SIZE says otherwise ("WxH"); a pretend mode change
+   (RDPS_HOST_MODE_FILE, below) can give it another size and any RISC OS
+   pixel format, palette ones included. It shows four coloured quarters
    and a white square that moves one tile to the right every second, so a
    client's picture can be checked pixel by pixel. Input goes to the file
    named by RDPS_HOST_INPUT_LOG ("mouse X Y" and "key LL down|up" lines).
 
    Copyright (c) 2026 Andrew Youll. MIT licence (see LICENSE). */
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -19,19 +22,110 @@ static int sw = 640, sh = 480;
 static int spad;                 /* pixels past the end of each line */
 static int sprite_reads;         /* this many reads see output going to a sprite */
 static int square_at = -1;
+/* the mode's pixel format: Log2BPP, NColour, ModeFlags */
+static int hl2bpp = 5, hncolour = -1;
+static unsigned hflags = 0x40;
+/* palette modes: black, red, green, blue, grey, white, then black */
+static uint32_t hpal[256] = { 0x000000, 0xff0000, 0x00ff00, 0x0000ff, 0x808080, 0xffffff };
 
-/* TBGR: red in the low byte. */
+static int
+hbits (void)
+{
+  return 1 << hl2bpp;
+}
+
+static size_t
+hstride (void)
+{
+  return ((size_t) (sw + spad) * (size_t) hbits () + 7) / 8;
+}
+
+/* One pixel in the mode's format (palette modes: the entry with that
+   colour, or 0). */
 static void
 put (int x, int y, unsigned r, unsigned g, unsigned b)
 {
-  unsigned char *p = screen + ((size_t) y * (sw + spad) + x) * 4;
-  p[0] = (unsigned char) r; p[1] = (unsigned char) g; p[2] = (unsigned char) b; p[3] = 0;
+  unsigned char *row = screen + (size_t) y * hstride ();
+  int rgb = (hflags & 0x4000) != 0, bits = hbits ();
+  if (bits == 32)
+    {
+      unsigned char *p = row + (size_t) x * 4;
+      p[0] = (unsigned char) (rgb ? b : r); p[1] = (unsigned char) g;
+      p[2] = (unsigned char) (rgb ? r : b); p[3] = 0;
+    }
+  else if (bits == 16)
+    {
+      unsigned v, lo = rgb ? b : r, hi = rgb ? r : b;
+      unsigned char *p = row + (size_t) x * 2;
+      if (hncolour == 4095)
+        v = (lo >> 4) | ((g >> 4) << 4) | ((hi >> 4) << 8);
+      else if (hflags & 0x80)
+        v = (lo >> 3) | ((g >> 2) << 5) | ((hi >> 3) << 11);
+      else
+        v = (lo >> 3) | ((g >> 3) << 5) | ((hi >> 3) << 10);
+      p[0] = (unsigned char) v; p[1] = (unsigned char) (v >> 8);
+    }
+  else
+    {
+      unsigned want = (r << 16) | (g << 8) | b, i, n = 1u << bits, at;
+      unsigned mask = n - 1;
+      for (i = 0; i < n && hpal[i] != want; i++)
+        ;
+      if (i == n)
+        i = 0;
+      at = (unsigned) x * (unsigned) bits;
+      row[at >> 3] = (unsigned char) ((row[at >> 3] & ~(mask << (at & 7))) | (i << (at & 7)));
+    }
+}
+
+/* A system variable: RISC OS's "RDPServer$SendBuffer" is the environment's
+   "RDPServer_SendBuffer". */
+int
+plat_var_int (const char *name, int def)
+{
+  char n[64];
+  const char *v;
+  size_t i;
+  for (i = 0; name[i] && i < sizeof n - 1; i++)
+    n[i] = name[i] == '$' ? '_' : name[i];
+  n[i] = 0;
+  v = getenv (n);
+  return v && *v ? atoi (v) : def;
+}
+
+/* The pretend RISC OS keyboard: RDPS_HOST_KEYBOARD, or UK. */
+int
+plat_keyboard (void)
+{
+  const char *k = getenv ("RDPS_HOST_KEYBOARD");
+  return k ? atoi (k) : 1;
+}
+
+int
+plat_palette (uint32_t rgb[256])
+{
+  int n = hbits () <= 8 ? 1 << hbits () : 0;
+  memcpy (rgb, hpal, (size_t) n * sizeof *rgb);
+  return n;
 }
 
 static void
 draw (int at)
 {
   int x, y;
+  if (getenv ("RDPS_HOST_NOISE"))
+    {
+      /* RDPS_HOST_NOISE: a new screenful of noise every second (nothing
+         compresses it), for tests of a client that stops reading */
+      static unsigned seed = 12345;
+      size_t i, n = hstride () * (size_t) sh;
+      for (i = 0; i < n; i++)
+        {
+          seed = seed * 1103515245u + 12345u;
+          screen[i] = (unsigned char) (seed >> 16);
+        }
+      return;
+    }
   for (y = 0; y < sh; y++)
     for (x = 0; x < sw; x++)
       {
@@ -63,7 +157,7 @@ plat_screen (rdps_screen *s)
       const char *size = getenv ("RDPS_HOST_SIZE");
       if (size)
         sscanf (size, "%dx%d", &sw, &sh);
-      screen = malloc ((size_t) sw * sh * 4);
+      screen = malloc (hstride () * sh);
       if (!screen)
         return "no memory for the fake screen";
     }
@@ -87,31 +181,56 @@ plat_screen (rdps_screen *s)
             if (fscanf (f, "%d", &sprite_reads) != 1)
               sprite_reads = 100;
           }
+        /* "pal": a program changes the palette (red becomes yellow) */
+        else if (strcmp (word, "pal") == 0)
+          hpal[1] = 0xffff00;
         else if (strcmp (word, "bank") == 0)
           {
-            n = malloc ((size_t) (sw + spad) * sh * 4);
+            n = malloc (hstride () * sh);
             if (n)
               {
-                memcpy (n, screen, (size_t) (sw + spad) * sh * 4);
+                memcpy (n, screen, hstride () * sh);
                 free (screen);
                 screen = n;
               }
           }
-        /* "WxH", or "WxH pad": each line 32 pixels longer than it shows
-           (another LineLength, as a mode at the same size can have) */
+        /* "WxH", then any of: "pad" (each line 32 pixels longer than it
+           shows: another LineLength, as a mode at the same size can
+           have); a depth, "1", "2", "4", "8" (palette), "4k", "32k",
+           "64k" or "16m"; "rgb" (RGB order, ModeFlags bit 14) */
         else if (fseek (f, at0, SEEK_SET) == 0 && fscanf (f, "%dx%d", &w, &h) == 2 && w >= 64 && h >= 64 && w <= 4096 && h <= 4096)
           {
-            int pad = fscanf (f, "%7s", word) == 1 && strcmp (word, "pad") == 0 ? 32 : 0;
-            if ((n = malloc ((size_t) (w + pad) * h * 4)) != NULL)
+            int pad = 0, l2 = 5, nc = -1;
+            unsigned fl = 0x40;
+            while (fscanf (f, "%7s", word) == 1)
               {
-                free (screen);
-                screen = n;
-                memset (screen, 0x55, (size_t) (w + pad) * h * 4);
-                sw = w;
-                sh = h;
-                spad = pad;
-                square_at = -1;
+                if (strcmp (word, "pad") == 0) pad = 32;
+                else if (strcmp (word, "1") == 0) { l2 = 0; nc = 1; fl = 0; }
+                else if (strcmp (word, "2") == 0) { l2 = 1; nc = 3; fl = 0; }
+                else if (strcmp (word, "4") == 0) { l2 = 2; nc = 15; fl = 0; }
+                else if (strcmp (word, "8") == 0) { l2 = 3; nc = 255; fl = 0x80; }
+                else if (strcmp (word, "4k") == 0) { l2 = 4; nc = 4095; fl = 0x80; }
+                else if (strcmp (word, "32k") == 0) { l2 = 4; nc = 65535; fl = 0; }
+                else if (strcmp (word, "64k") == 0) { l2 = 4; nc = 65535; fl = 0x80; }
+                else if (strcmp (word, "16m") == 0) { l2 = 5; nc = -1; fl = 0x40; }
+                else if (strcmp (word, "rgb") == 0) fl |= 0x4000;
               }
+            {
+              size_t stride = ((size_t) (w + pad) * (size_t) (1 << l2) + 7) / 8;
+              if ((n = malloc (stride * h)) != NULL)
+                {
+                  free (screen);
+                  screen = n;
+                  memset (screen, 0x55, stride * h);
+                  sw = w;
+                  sh = h;
+                  spad = pad;
+                  hl2bpp = l2;
+                  hncolour = nc;
+                  hflags = fl;
+                  square_at = -1;
+                }
+            }
           }
         fclose (f);
         remove (mf);
@@ -125,13 +244,13 @@ plat_screen (rdps_screen *s)
     }
   s->width = sw;
   s->height = sh;
-  s->log2bpp = 5;
-  s->ncolour = -1;
-  s->modeflags = 0x40;
+  s->log2bpp = hl2bpp;
+  s->ncolour = hncolour;
+  s->modeflags = hflags;
   s->xeig = s->yeig = 1;
-  s->stride = (size_t) (sw + spad) * 4;
+  s->stride = hstride ();
   s->base = screen;
-  s->total = (size_t) (sw + spad) * sh * 4;
+  s->total = hstride () * sh;
   s->redirected = 0;
   if (sprite_reads > 0)
     {
@@ -163,6 +282,21 @@ plat_mouse_to (const rdps_screen *s, int x, int y)
 {
   (void) s;
   logline ("mouse %d %d\n", x, y);
+}
+
+int
+plat_char (int c)
+{
+  logline ("char %02X\n", c, 0);
+  return 0;
+}
+
+/* RDPS_HOST_ALPHABET: the alphabet number to pretend (101, Latin1). */
+int
+plat_alphabet (void)
+{
+  const char *a = getenv ("RDPS_HOST_ALPHABET");
+  return a && *a ? atoi (a) : 101;
 }
 
 /* RDPS_HOST_STUCK_SHIFT pretends RISC OS thinks Shift is held (as the

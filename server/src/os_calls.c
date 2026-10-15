@@ -223,6 +223,7 @@ g_sck_listen (int sck)
 /* The client's send buffer, as big as the stack allows (bytes; 0 if
    none could be set), and bytes sent in all: see srvthread.h. */
 int rdps_sndbuf;
+int rdps_sndbuf_want;          /* RDPServer$SendBuffer, bytes; 0: ours */
 unsigned rdps_bytes_sent;
 
 int
@@ -233,11 +234,17 @@ g_sck_accept (int sck)
   int s = accept (sck, (struct sockaddr *) &sa, &len);
   if (s >= 0)
     {
-      /* A big send buffer, so a turn can hand over a whole picture's
-         worth while the Internet module sends it on. Tried smaller until
-         the stack takes it. */
-      static const int sizes[] = { 256 * 1024, 128 * 1024, 64 * 1024 };
+      /* A send buffer big enough for the Internet module to keep sending
+         between turns, but not so big that a slow client ties up the
+         stack's mbufs: they're shared by every socket, and when
+         MbufManager runs out the stack stops altogether (a tester, 0.2-rc1
+         with 256 KB: "I think mbufmanager ran out of space and networking
+         stopped"). More waits in RDPServer's own memory (trans wait_s).
+         Tried smaller until the stack takes it. */
+      int sizes[] = { 64 * 1024, 64 * 1024, 32 * 1024 };
       size_t i;
+      if (rdps_sndbuf_want > 0)
+        sizes[0] = rdps_sndbuf_want;   /* for trying others: RDPServer$SendBuffer */
       rdps_sndbuf = 0;
       for (i = 0; i < sizeof sizes / sizeof sizes[0]; i++)
         if (setsockopt (s, SOL_SOCKET, SO_SNDBUF, (char *) &sizes[i],

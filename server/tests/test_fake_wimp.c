@@ -37,11 +37,19 @@ int server_start (const server_options *o)
 int server_step (unsigned max_wait_cs) { (void) max_wait_cs; steps++; return (int) step_wait; }
 void server_finish (void) { finished++; fake_status.listening = 0; }
 void server_shutdown (void) { shutdowns++; fake_status.listening = 0; }
+static int leaves;
+void server_leave_running (void) { leaves++; }
 const char *server_start_error (void) { return start_fails ? start_error : NULL; }
 void server_disconnect (void) { disconnected++; fake_status.connected = 0; }
 int server_reload_logins (void) { reloaded++; return 0; }
 static int mute_calls, mute_set = -1;
 void server_set_mute (int on) { mute_calls++; mute_set = on; }
+static int tls_calls, tls_set = -1;
+void server_set_require_tls (int on) { tls_calls++; tls_set = on; }
+static int sound_calls, sound_set = -1;
+void server_set_sound (int on) { sound_calls++; sound_set = on; }
+static char choices[64];
+const char *plat_choices_dir (void) { return choices; }
 void server_get_status (server_status *st) { *st = fake_status; st->login_set = have_login; }
 void server_set_message_hook (void (*h) (const char *)) { hook = h; }
 
@@ -78,12 +86,13 @@ static int windows, window_icons[8];
 static int *window_blocks[8];
 static int bar_block[9], bar_icon_calls;
 static int opened_window, open_calls, closed_window;
-static int redraws, last_redraw[4], bar_redraws, opt_state[4];
+static int redraws, last_redraw[4], bar_redraws, opt_state[4], tls_state[4];
+static int sound_state[4], mute_shade[4];
 static const char *menu_ptr;
 static int menu_x, menu_y, menu_calls;
 static char reported[256];
 static int caret[6], processed_key = -1, pointer_buttons;
-static int store[8][22 + 8 * 12];
+static int store[8][22 + 8 * 13];
 
 static const _kernel_oserror *wimp (int swi, int r[10])
 {
@@ -117,8 +126,14 @@ static const _kernel_oserror *wimp (int swi, int r[10])
       return NULL;
     case Wimp_SetIconState:
       memcpy (last_redraw, b, sizeof last_redraw);
-      if (b[1] == 10)
+      if (b[1] == 10 && b[3] == 0x200000)
         memcpy (opt_state, b, sizeof opt_state);
+      if (b[1] == 10 && b[3] == 0x400000)
+        memcpy (mute_shade, b, sizeof mute_shade);
+      if (b[1] == 11)
+        memcpy (tls_state, b, sizeof tls_state);
+      if (b[1] == 12)
+        memcpy (sound_state, b, sizeof sound_state);
       redraws++;
       if (b[0] == -2 && b[1] == 3)
         bar_redraws++;
@@ -219,16 +234,20 @@ int main (void)
     return 1;
   snprintf (settings, sizeof settings, "%s/Settings", dir);
   snprintf (log, sizeof log, "%s/Log", dir);
+  snprintf (choices, sizeof choices, "%s", dir);
   memset (&o, 0, sizeof o);
   w.opt = &o; w.version = "0.1-test3"; w.settings_file = settings;
   w.logins_file = "unused"; w.log_file = log;
 
   CHECK (wimp_read_port (settings, 3389) == 3389, "no settings file: port 3389");
-  CHECK (wimp_write_settings (settings, 3390, 1) == 0 && wimp_read_port (settings, 3389) == 3390,
+  CHECK (wimp_write_settings (settings, 3390, 1, 1, 1) == 0 && wimp_read_port (settings, 3389) == 3390
+         && wimp_read_tls (settings, 0) == 1,
          "the port is saved and read back");
   CHECK (wimp_read_mute (settings, 0) == 1, "and the mute choice");
-  CHECK (wimp_write_settings (settings, 3390, 0) == 0 && wimp_read_mute (settings, 1) == 0,
-         "mute off is saved too");
+  CHECK (wimp_read_sound (settings, 0) == 1, "and the sound choice");
+  CHECK (wimp_write_settings (settings, 3390, 0, 0, 0) == 0 && wimp_read_mute (settings, 1) == 0
+         && wimp_read_tls (settings, 1) == 0 && wimp_read_sound (settings, 1) == 0,
+         "mute and sound off are saved too");
   f = fopen (settings, "w"); fputs ("port 99999\n", f); fclose (f);
   CHECK (wimp_read_port (settings, 3389) == 3389, "a port out of range is ignored");
   f = fopen (settings, "w"); fputs ("port 5000\n", f); fclose (f);
@@ -241,7 +260,7 @@ int main (void)
   CHECK (strcmp ((const char *) bar_block[6], "!rdpserver") == 0 && bar_block[7] == 1,
          "the !rdpserver sprite, from the Wimp's pool");
   CHECK (((bar_block[5] >> 12) & 15) == 3, "the icon reports clicks");
-  CHECK (window_icons[1] == 11, "Choices has its eleven icons");
+  CHECK (window_icons[1] == 13, "Choices has its thirteen icons");
   CHECK (((window_blocks[1][22 + 8 * 1 + 4] >> 12) & 15) == 15
          && ((window_blocks[1][22 + 8 * 5 + 4] >> 12) & 15) == 15, "port and password are writable");
   CHECK (strncmp ((const char *) window_blocks[1][22 + 8 * 5 + 6], "D*", 2) == 0,
@@ -254,7 +273,10 @@ int main (void)
   /* The server's messages: the log and the Status window. */
   hook ("listening on port 5000");
   wimp_tick ();
-  CHECK (strcmp (wimp_icon_text (0, 9), "listening on port 5000") == 0, "the newest message is last");
+  CHECK (strcmp (wimp_icon_text (0, 27), "listening on port 5000") == 0, "the newest message is last");
+  CHECK (strcmp (wimp_icon_text (0, 1), "Client") == 0 && strcmp (wimp_icon_text (0, 10), "Login") == 0,
+         "Status: the details' labels");
+  CHECK (strcmp (wimp_icon_text (0, 11), "-") == 0, "nothing connected: the details say -");
   f = fopen (log, "r");
   CHECK (f && fgets (line, sizeof line, f) && strstr (line, "RDPServer 0.1-test3"), "the log starts with the version");
   CHECK (f && fgets (line, sizeof line, f) && strcmp (line, "listening on port 5000\n") == 0,
@@ -279,6 +301,35 @@ int main (void)
   CHECK (bar_redraws == 1, "the icon is redrawn");
   CHECK (strstr (wimp_icon_text (0, 0), "Connected: 192.168.0.58:58303 (andrew), 1920 x 1080, 32 bpp") != NULL,
          "Status says who's connected");
+  snprintf (fake_status.hostname, sizeof fake_status.hostname, "Mac-Studio");
+  snprintf (fake_status.protocol, sizeof fake_status.protocol, "RDP 10.12");
+  snprintf (fake_status.security, sizeof fake_status.security, "TLSv1.2, TLS-ECDHE-RSA-WITH-CHACHA20-POLY1305-SHA256");
+  snprintf (fake_status.screen, sizeof fake_status.screen, "1920 x 1080, 16 million colours");
+  fake_status.connected_s = 125;
+  fake_status.kbytes_sent = 20480;
+  fake_status.tiles_sent = 900;
+  now += 60;
+  wimp_tick ();
+  CHECK (strcmp (wimp_icon_text (0, 11), "192.168.0.58:58303 (Mac-Studio)") == 0, "Status: the client and its name");
+  CHECK (strcmp (wimp_icon_text (0, 12), "andrew") == 0, "the user");
+  CHECK (strcmp (wimp_icon_text (0, 13), "2 min 5 s") == 0, "connected for");
+  CHECK (strcmp (wimp_icon_text (0, 14), "RDP 10.12") == 0, "the protocol");
+  CHECK (strstr (wimp_icon_text (0, 15), "CHACHA20") != NULL, "the security");
+  CHECK (strcmp (wimp_icon_text (0, 16), "1920 x 1080, 16 million colours; the client 32 bpp") == 0,
+         "the screen and the client's depth");
+  CHECK (strcmp (wimp_icon_text (0, 19), "20 MB, 900 screen pieces") == 0, "what's been sent");
+  fake_status.connected = 0;
+  fake_status.connecting = 1;
+  fake_status.at_login = 1;
+  now += 60;
+  wimp_tick ();
+  CHECK (strstr (wimp_icon_text (0, 0), "At the login screen: 192.168.0.58:58303") != NULL,
+         "at the login screen: said so");
+  fake_status.connected = 1;
+  fake_status.connecting = 0;
+  fake_status.at_login = 0;
+  now += 60;
+  wimp_tick ();
 
   /* The icon bar. */
   CHECK (click (-2, 3, Button_Select) == 0 && opened_window == STATUS, "Select opens Status");
@@ -369,7 +420,7 @@ int main (void)
   /* Choices: mute this computer while a client listens. */
   {
     const int *mi = &window_blocks[1][22 + 8 * 10];
-    CHECK (window_icons[1] == 11 && (mi[4] & 0x3) == 0x3 && ((mi[4] >> 12) & 15) == 3
+    CHECK (window_icons[1] == 13 && (mi[4] & 0x3) == 0x3 && ((mi[4] >> 12) & 15) == 3
            && strcmp ((const char *) mi[6], "Soptoff,opton") == 0
            && strstr ((const char *) mi[5], "Mute this computer"),
            "Choices has the mute option (text and optoff/opton sprites, reports clicks)");
@@ -396,6 +447,67 @@ int main (void)
   click (CHOICES, 10, Button_Select);
   CHECK (click (CHOICES, 9, Button_Select) == 0 && mute_calls == 2 && mute_set == 0
          && wimp_read_mute (settings, 1) == 0, "off again, saved");
+
+  /* Choices: send this computer's sound to the client (off unless chosen,
+     0.2-test22); muting this computer is shaded while it's off. */
+  {
+    const int *si = &window_blocks[1][22 + 8 * 12];
+    CHECK (strstr ((const char *) si[5], "Send this computer's sound") && ((si[4] >> 12) & 15) == 3
+           && strcmp ((const char *) si[6], "Soptoff,opton") == 0, "Choices has the sound option");
+    CHECK (o.send_sound == 0, "sound not sent to start with");
+    click (-2, 3, Button_Adjust);
+    CHECK (sound_state[0] == CHOICES && sound_state[2] == 0, "shown off");
+    CHECK (mute_shade[0] == CHOICES && mute_shade[2] == 0x400000, "and the mute option shaded");
+    click (CHOICES, 12, Button_Select);
+    CHECK (sound_state[2] == 0x200000 && mute_shade[2] == 0, "a click ticks it, and mute can be chosen");
+    CHECK (sound_calls == 0 && o.send_sound == 0, "not used until Save");
+    started = finished = 0;
+    CHECK (click (CHOICES, 9, Button_Select) == 0 && sound_calls == 1 && sound_set == 1
+           && o.send_sound == 1 && started == 0 && finished == 0,
+           "Save: the running server is told (no restart)");
+    CHECK (wimp_read_sound (settings, 0) == 1 && wimp_read_port (settings, 0) == 3391,
+           "saved, with the port");
+    click (-2, 3, Button_Adjust);
+    CHECK (sound_state[2] == 0x200000 && mute_shade[2] == 0, "Choices shows it on");
+    click (CHOICES, 12, Button_Select);
+    CHECK (click (CHOICES, 9, Button_Select) == 0 && sound_calls == 2 && sound_set == 0
+           && o.send_sound == 0 && wimp_read_sound (settings, 1) == 0, "off again, saved");
+  }
+
+  /* Choices: only allow TLS connections. */
+  {
+    const int *ti = &window_blocks[1][22 + 8 * 11];
+    char k[128], c[128];
+    CHECK (strstr ((const char *) ti[5], "Only allow TLS") && ((ti[4] >> 12) & 15) == 3
+           && strcmp ((const char *) ti[6], "Soptoff,opton") == 0, "Choices has the TLS option");
+    CHECK (o.require_tls == 0, "TLS not required to start with");
+    click (-2, 3, Button_Adjust);
+    CHECK (tls_state[0] == CHOICES && tls_state[2] == 0, "shown off");
+    click (CHOICES, 11, Button_Select);
+    reported[0] = 0;
+    CHECK (click (CHOICES, 9, Button_Select) == 0 && strstr (reported, "no TLS certificate")
+           && tls_calls == 0 && o.require_tls == 0 && tls_state[2] == 0,
+           "no certificate: TLS can't be required (it says why, the tick goes)");
+    snprintf (k, sizeof k, "%s/key.pem", choices);
+    snprintf (c, sizeof c, "%s/cert.pem", choices);
+    f = fopen (k, "w"); fputs ("k", f); fclose (f);
+    f = fopen (c, "w"); fputs ("c", f); fclose (f);
+    click (CHOICES, 11, Button_Select);
+    started = finished = 0;
+    reported[0] = 0;
+    CHECK (click (CHOICES, 9, Button_Select) == 0 && reported[0] == 0 && tls_calls == 1
+           && tls_set == 1 && o.require_tls == 1 && started == 0 && finished == 0,
+           "with one: Save requires TLS from the next client (no restart)");
+    CHECK (wimp_read_tls (settings, 0) == 1 && wimp_read_mute (settings, 1) == 0
+           && wimp_read_port (settings, 0) == 3391, "saved, with the port and mute");
+    click (-2, 3, Button_Adjust);
+    CHECK (tls_state[2] == 0x200000, "Choices shows it on");
+    click (CHOICES, 11, Button_Select);
+    CHECK (click (CHOICES, 9, Button_Select) == 0 && tls_calls == 2 && tls_set == 0
+           && o.require_tls == 0 && wimp_read_tls (settings, 1) == 0, "off again, saved");
+    remove (k);
+    remove (c);
+  }
 
   start_fails = 1;
   click (-2, 3, Button_Adjust);
@@ -430,7 +542,60 @@ int main (void)
   shutdowns = 0;
   wimp_close ();
   CHECK (fake_calls (Wimp_CloseDown) == 1, "Wimp_CloseDown at the end");
-  CHECK (shutdowns == 1, "the server (and the module) let go of at the end");
+  CHECK (shutdowns == 1 && leaves == 0, "the server (and the module) let go of at the end");
+
+  /* The desktop shutting down (PreQuit, flags bit 0 clear, then Quit):
+     the server carries on in the module, so a client can click Restart
+     (0.2-test23). TaskManager quitting just this task (bit 0 set): it
+     stops as before. */
+  start_fails = 0;
+  windows = 0;                 /* (the fake's windows: made again) */
+  CHECK (wimp_init (&w) == 0, "started again");
+  memset (b, 0, sizeof b); b[0] = 24; b[4] = 8; b[5] = 1;
+  CHECK (wimp_event (User_Message, b) == 0, "PreQuit for this task alone: not objected to");
+  memset (b, 0, sizeof b); b[4] = 0;
+  wimp_event (User_Message, b);
+  shutdowns = leaves = 0;
+  wimp_close ();
+  CHECK (shutdowns == 1 && leaves == 0, "this task quitting alone: the server stops");
+  windows = 0;
+  CHECK (wimp_init (&w) == 0, "and again");
+  memset (b, 0, sizeof b); b[0] = 24; b[4] = 8; b[5] = 0;
+  CHECK (wimp_event (User_Message, b) == 0, "PreQuit for a shutdown: not objected to");
+  memset (b, 0, sizeof b); b[4] = 0;
+  CHECK (wimp_event (User_Message, b) == 1, "then Quit");
+  shutdowns = leaves = 0;
+  wimp_close ();
+  CHECK (leaves == 1 && shutdowns == 0, "a shutdown: the server carries on without the front end");
+  windows = 0;
+  CHECK (wimp_init (&w) == 0, "and again");
+  memset (b, 0, sizeof b); b[0] = 24; b[4] = 8; b[5] = 0;
+  wimp_event (User_Message, b);
+  CHECK (choose (4) == 1, "a shutdown someone objected to, then Quit from the menu");
+  shutdowns = leaves = 0;
+  wimp_close ();
+  CHECK (shutdowns == 1 && leaves == 0, "the menu's Quit stops it, whatever came before");
+  /* a short PreQuit (no flags word): a shutdown */
+  windows = 0;
+  CHECK (wimp_init (&w) == 0, "and again");
+  memset (b, 0, sizeof b); b[0] = 20; b[4] = 8; b[5] = 1;
+  wimp_event (User_Message, b);
+  memset (b, 0, sizeof b); b[4] = 0;
+  wimp_event (User_Message, b);
+  shutdowns = leaves = 0;
+  wimp_close ();
+  CHECK (leaves == 1 && shutdowns == 0, "a PreQuit with no flags word is a shutdown");
+  /* a shutdown cancelled (someone objected), then a bare Quit much later */
+  windows = 0;
+  CHECK (wimp_init (&w) == 0, "and again");
+  memset (b, 0, sizeof b); b[0] = 24; b[4] = 8; b[5] = 0;
+  wimp_event (User_Message, b);
+  now += 3001;
+  memset (b, 0, sizeof b); b[4] = 0;
+  wimp_event (User_Message, b);
+  shutdowns = leaves = 0;
+  wimp_close ();
+  CHECK (shutdowns == 1 && leaves == 0, "a Quit 30 s after a shutdown's PreQuit: not that shutdown, it stops");
 
   remove (settings);
   remove (log);

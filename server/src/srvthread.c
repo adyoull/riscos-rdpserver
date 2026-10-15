@@ -2,6 +2,7 @@
    Copyright (c) 2026 Andrew Youll. MIT licence (see LICENSE). */
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
 #include <unistd.h>
 #include <sys/socket.h>
 
@@ -195,6 +196,44 @@ rdps_cmd_set_mute (int on)
 }
 
 void
+rdps_cmd_shutdown_complete (void)
+{
+  if (ready)
+    server_shutdown_complete ();     /* (a flag) */
+}
+
+void
+rdps_cmd_restarting (void)
+{
+  if (ready && !co_inside ())
+    server_restarting ();
+}
+
+int
+rdps_cmd_restart_done (void)
+{
+  return !ready || co_inside () || server_restart_done ();
+}
+
+int
+rdps_cmd_set_sound (int on)
+{
+  if (!ready || co_inside ())
+    return -1;
+  server_set_sound (on);
+  return 0;
+}
+
+int
+rdps_cmd_set_require_tls (int on)
+{
+  if (!ready || co_inside ())
+    return -1;
+  server_set_require_tls (on);
+  return 0;
+}
+
+void
 rdps_cmd_disconnect (void)
 {
   int sck;
@@ -242,6 +281,30 @@ server_run (const server_options *o)
       unsigned now = plat_time_cs ();
       if (o->max_seconds && now - start >= (unsigned) o->max_seconds * 100)
         break;
+      if (server_shutdown_seen)
+        {
+          server_shutdown_seen = 0;
+          rdps_cmd_shutdown_complete ();
+        }
+      if (server_prereset)
+        {
+          /* SIGUSR2: a pretend reset (the module's Service_PreReset):
+             the client is told, then the process ends without closing
+             the session, as a reset would. */
+          int i;
+          rdps_cmd_restarting ();
+          for (i = 0; i < 100; i++)
+            {
+              rdps_thread_run ();
+              if (rdps_cmd_restart_done ())
+                break;
+              usleep (10000);
+            }
+          fprintf (stderr, "RDPServer: pretend reset\n");
+          fflush (stderr);
+          fflush (stdout);
+          _exit (0);
+        }
       if (rdps_thread_due (now))
         rdps_thread_run ();
       usleep (gap * 10000);

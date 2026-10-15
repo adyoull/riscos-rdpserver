@@ -280,6 +280,8 @@ strdup (const char *s)
 /* (This file is compiled with -fno-builtin and
    -fno-tree-loop-distribute-patterns, so these loops stay loops.) */
 
+void rdps_copy_ldm8 (void *dst, const void *src, size_t n);   /* scrcopy.s */
+
 void *
 memcpy (void *d, const void *s, size_t n)
 {
@@ -287,6 +289,14 @@ memcpy (void *d, const void *s, size_t n)
   const unsigned char *sp = s;
   if ((((uintptr_t) dp | (uintptr_t) sp) & 3) == 0)
     {
+      /* Eight words a load: several times quicker out of uncached memory
+         (the screen) than the loop below, which the compiler makes single
+         words (0.2-test21). */
+      if (n >= 32)
+        {
+          rdps_copy_ldm8 (d, s, n);
+          return d;
+        }
       while (n >= 16)
         {
           ((uint32_t *) dp)[0] = ((const uint32_t *) sp)[0];
@@ -336,6 +346,15 @@ memset (void *d, int c, size_t n)
       *dp++ = (unsigned char) c;
       n--;
     }
+  while (n >= 16)
+    {
+      ((uint32_t *) dp)[0] = w;
+      ((uint32_t *) dp)[1] = w;
+      ((uint32_t *) dp)[2] = w;
+      ((uint32_t *) dp)[3] = w;
+      dp += 16;
+      n -= 16;
+    }
   while (n >= 4)
     {
       *(uint32_t *) dp = w;
@@ -351,6 +370,28 @@ int
 memcmp (const void *a, const void *b, size_t n)
 {
   const unsigned char *x = a, *y = b;
+  /* Word by word while both are aligned (the screen's rows and tiles are):
+     four times fewer loads than bytes. The first word that differs is
+     then compared byte by byte, for the sign. (0.2-test22) */
+  if ((((uintptr_t) x | (uintptr_t) y) & 3) == 0)
+    {
+      while (n >= 16
+             && ((const uint32_t *) x)[0] == ((const uint32_t *) y)[0]
+             && ((const uint32_t *) x)[1] == ((const uint32_t *) y)[1]
+             && ((const uint32_t *) x)[2] == ((const uint32_t *) y)[2]
+             && ((const uint32_t *) x)[3] == ((const uint32_t *) y)[3])
+        {
+          x += 16;
+          y += 16;
+          n -= 16;
+        }
+      while (n >= 4 && *(const uint32_t *) x == *(const uint32_t *) y)
+        {
+          x += 4;
+          y += 4;
+          n -= 4;
+        }
+    }
   for (; n; n--, x++, y++)
     if (*x != *y)
       return *x - *y;
@@ -894,6 +935,22 @@ fgets (char *buf, int size, FILE *f)
     }
   buf[n] = 0;
   return buf;
+}
+
+size_t
+fread (void *buf, size_t size, size_t count, FILE *f)
+{
+  mfile *m = as_mfile (f);
+  size_t want, have;
+  if (!m || m->console || size == 0)
+    return 0;
+  want = size * count;
+  have = m->len - m->pos;
+  if (want > have)
+    want = have - have % size;
+  memcpy (buf, m->data + m->pos, want);
+  m->pos += want;
+  return want / size;
 }
 
 int

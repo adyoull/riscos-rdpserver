@@ -154,3 +154,198 @@ rdps_keygen (const char *file)
   memset (d, 0, sizeof d);
   return fclose (f) != 0;
 }
+
+/* --- the TLS certificate (0.2-test14) -------------------------------------------
+   TLS needs the key as a PEM file and an X.509 certificate for it. Both
+   are made from the key in rsakeys.ini (so no second key, and no second
+   minute's wait, on machines that already have one): the private
+   exponent and modulus give the primes back (mbedtls_rsa_complete). The
+   certificate is self-signed: no one vouches for it, so clients ask the
+   first time; it says it's for server authentication, as Windows wants. */
+#include <time.h>
+#include <unistd.h>
+#include <fcntl.h>
+
+/* For the unit tests only: allow a key under 2048 bits. */
+int rdps_tls_small_keys_ok;
+#include "mbedtls/rsa.h"
+#include "mbedtls/pk.h"
+#include "mbedtls/x509_crt.h"
+#include "mbedtls/oid.h"
+#include "mbedtls/asn1.h"
+
+static int
+cert_rng (void *p, unsigned char *buf, size_t len)
+{
+  (void) p;
+  g_random ((char *) buf, (int) len);
+  return 0;
+}
+
+/* A "name=0x01,0x02,..." line of rsakeys.ini, little-endian, as big-endian. */
+static int
+read_hex_line (const char *file, const char *name, unsigned char *out, int size)
+{
+  FILE *f = fopen (file, "r");
+  char line[2048];
+  size_t nl = strlen (name);
+  int n = -1;
+  if (!f)
+    return -1;
+  while (fgets (line, sizeof line, f))
+    if (strncmp (line, name, nl) == 0 && line[nl] == '=')
+      {
+        const char *p = line + nl + 1;
+        unsigned char le[512];
+        int i;
+        n = 0;
+        while (*p && *p != '\n' && *p != '\r' && n < (int) sizeof le)
+          {
+            unsigned v;
+            if (sscanf (p, "0x%2x", &v) != 1)
+              break;
+            le[n++] = (unsigned char) v;
+            p += 4;
+            if (*p == ',')
+              p++;
+          }
+        memset (line, 0, sizeof line);
+        if (n > size)
+          n = -1;
+        else
+          for (i = 0; i < n; i++)
+            out[i] = le[n - 1 - i];
+        memset (le, 0, sizeof le);
+        break;
+      }
+  fclose (f);
+  return n;
+}
+
+/* The certificate's CN: this computer's name if it has one. */
+static void
+host_name (char *out, size_t size)
+{
+  const char *h = getenv ("Inet$HostName");
+  size_t i, j = 0;
+#ifndef __riscos
+  char buf[128];
+  if (!h || !*h)
+    {
+      buf[0] = 0;
+      if (gethostname (buf, sizeof buf - 1) == 0)
+        h = buf;
+    }
+#endif
+  if (!h || !*h)
+    h = "RISC OS";
+  for (i = 0; h[i] && j + 1 < size; i++)
+    if ((h[i] >= 'a' && h[i] <= 'z') || (h[i] >= 'A' && h[i] <= 'Z')
+        || (h[i] >= '0' && h[i] <= '9') || h[i] == '-' || h[i] == '.' || h[i] == ' ')
+      out[j++] = h[i];
+  out[j] = 0;
+  if (!j)
+    snprintf (out, size, "RISC OS");
+}
+
+static int
+write_file (const char *name, const unsigned char *data)
+{
+  /* only the owner can read it (Linux; RISC OS ignores it) */
+  int fd = open (name, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+  FILE *f = fd >= 0 ? fdopen (fd, "w") : NULL;
+  size_t n = strlen ((const char *) data);
+  if (!f)
+    return 1;
+  if (fwrite (data, 1, n, f) != n)
+    {
+      fclose (f);
+      return 1;
+    }
+  return fclose (f) != 0;
+}
+
+int
+rdps_make_tls_cert (const char *rsakeys, const char *key_pem, const char *cert_pem)
+{
+  unsigned char n[256], e[4], d[256], serial[16];
+  static unsigned char pem[8192];
+  char subject[160], host[64], from[40], to[40];
+  mbedtls_pk_context pk;
+  mbedtls_x509write_cert crt;
+  mbedtls_asn1_sequence eku;
+  time_t now = time (NULL) - 24 * 3600;      /* clocks differ */
+  struct tm *t = gmtime (&now);
+  int nl, el, dl, r = 1;
+
+  nl = read_hex_line (rsakeys, "pub_mod", n, sizeof n);
+  el = read_hex_line (rsakeys, "pub_exp", e, sizeof e);
+  dl = read_hex_line (rsakeys, "pri_exp", d, sizeof d);
+  if (nl <= 0 || el <= 0 || dl <= 0 || !t)
+    return 1;
+  if (nl < 256 && !rdps_tls_small_keys_ok)
+    return 1;                                 /* under 2048 bits: too weak */
+  if (t->tm_year + 1900 < 2026)
+    {
+      /* the clock isn't set (no clock chip, no NetTime yet): clients check
+         the dates against their own clocks, so start from a known past */
+      static struct tm known;
+      memset (&known, 0, sizeof known);
+      known.tm_year = 2026 - 1900;
+      known.tm_mday = 1;
+      t = &known;
+    }
+  snprintf (from, sizeof from, "%04d%02d%02d%02d%02d%02d", t->tm_year + 1900,
+            t->tm_mon + 1, t->tm_mday, t->tm_hour, t->tm_min, t->tm_sec);
+  snprintf (to, sizeof to, "%04d%02d%02d%02d%02d%02d", t->tm_year + 1900 + 20,
+            t->tm_mon + 1, t->tm_mday > 28 ? 28 : t->tm_mday, t->tm_hour,
+            t->tm_min, t->tm_sec);
+  host_name (host, sizeof host);
+  snprintf (subject, sizeof subject, "CN=%s,O=RDPServer", host);
+
+  mbedtls_pk_init (&pk);
+  mbedtls_x509write_crt_init (&crt);
+  memset (&eku, 0, sizeof eku);
+  eku.buf.tag = MBEDTLS_ASN1_OID;
+  eku.buf.p = (unsigned char *) MBEDTLS_OID_SERVER_AUTH;
+  eku.buf.len = MBEDTLS_OID_SIZE (MBEDTLS_OID_SERVER_AUTH);
+  cert_rng (NULL, serial, sizeof serial);
+  serial[0] &= 0x7f;                          /* positive */
+  serial[0] |= 0x01;
+  if (mbedtls_pk_setup (&pk, mbedtls_pk_info_from_type (MBEDTLS_PK_RSA)) == 0
+      && mbedtls_rsa_import_raw (mbedtls_pk_rsa (pk), n, (size_t) nl, NULL, 0, NULL, 0,
+                                 d, (size_t) dl, e, (size_t) el) == 0
+      && mbedtls_rsa_complete (mbedtls_pk_rsa (pk)) == 0
+      && mbedtls_rsa_check_privkey (mbedtls_pk_rsa (pk)) == 0
+      && mbedtls_pk_write_key_pem (&pk, pem, sizeof pem) == 0
+      && write_file (key_pem, pem) == 0)
+    {
+      memset (pem, 0, sizeof pem);
+      mbedtls_x509write_crt_set_version (&crt, MBEDTLS_X509_CRT_VERSION_3);
+      mbedtls_x509write_crt_set_md_alg (&crt, MBEDTLS_MD_SHA256);
+      mbedtls_x509write_crt_set_subject_key (&crt, &pk);
+      mbedtls_x509write_crt_set_issuer_key (&crt, &pk);
+      if (mbedtls_x509write_crt_set_subject_name (&crt, subject) == 0
+          && mbedtls_x509write_crt_set_issuer_name (&crt, subject) == 0
+          && mbedtls_x509write_crt_set_serial_raw (&crt, serial, sizeof serial) == 0
+          && mbedtls_x509write_crt_set_validity (&crt, from, to) == 0
+          && mbedtls_x509write_crt_set_basic_constraints (&crt, 0, -1) == 0
+          && mbedtls_x509write_crt_set_key_usage (&crt, MBEDTLS_X509_KU_DIGITAL_SIGNATURE
+                                                  | MBEDTLS_X509_KU_KEY_ENCIPHERMENT) == 0
+          && mbedtls_x509write_crt_set_ext_key_usage (&crt, &eku) == 0
+          && mbedtls_x509write_crt_set_subject_key_identifier (&crt) == 0
+          && mbedtls_x509write_crt_pem (&crt, pem, sizeof pem, cert_rng, NULL) == 0
+          && write_file (cert_pem, pem) == 0)
+        r = 0;
+    }
+  if (r)
+    {
+      remove (key_pem);
+      remove (cert_pem);
+    }
+  mbedtls_x509write_crt_free (&crt);
+  mbedtls_pk_free (&pk);
+  memset (d, 0, sizeof d);
+  memset (pem, 0, sizeof pem);
+  return r;
+}

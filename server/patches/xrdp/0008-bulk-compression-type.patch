@@ -1,0 +1,23 @@
+--- a/libxrdp/xrdp_sec.c	2026-10-15 08:10:33.317850874 +0100
++++ b/libxrdp/xrdp_sec.c	2026-10-15 08:10:33.333535706 +0100
+@@ -719,9 +719,17 @@
+     {
+         LOG_DEVEL(LOG_LEVEL_DEBUG, "[MS-RDPBCGR] TS_INFO_PACKET flag INFO_COMPRESSION found, "
+                   "CompressionType 0x%1.1x", (flags & 0x00001E00) >> 9);
+-        /* TODO: check the client's supported compression type vs the server
+-           compression used */
+-        if (self->rdp_layer->client_info.use_bulk_comp)
++        /* RDPServer: the compressor is RDP 5's (64K history,
++           PACKET_COMPR_TYPE_64K = 1). CompressionType is the highest type
++           the client takes ([MS-RDPBCGR] 2.2.1.11.1.1): one that takes
++           only RDP 4's 8K type gets no bulk compression, not data it can't
++           expand. */
++        if (((flags & 0x00001E00) >> 9) < 1)
++        {
++            LOG(LOG_LEVEL_INFO, "The client takes only 8K bulk compression "
++                "(RDP 4): updates go uncompressed");
++        }
++        else if (self->rdp_layer->client_info.use_bulk_comp)
+         {
+ 
+             self->rdp_layer->client_info.rdp_compression = 1;

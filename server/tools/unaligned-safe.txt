@@ -9,3 +9,11 @@ mod/libc.c:.*\(const size_t \*\) \(\(const char \*\) p - BLOCK_HEAD\)
 # modclient.c: the module's table is at &34 from a module's start, and
 # modules are word-aligned in the RMA.
 modclient.c:.*\(const rdps_mod_table \*\) \(base \+ RDPS_MOD_TABLE\)
+# libc.c memset (0.2-test22): the unrolled loop, after the same alignment loop.
+mod/libc.c:.*\(\(uint32_t \*\) dp\)\[[0-3]\] = w;
+# libc.c memcmp (0.2-test22): only taken when both pointers are 4-aligned (tested first).
+mod/libc.c:.*\(\(const uint32_t \*\) x\)\[[0-3]\] == \(\(const uint32_t \*\) y\)\[[0-3]\]
+mod/libc.c:.*\*\(const uint32_t \*\) x == \*\(const uint32_t \*\) y
+# pixels.c pix_solid (0.2-test22): p is the server's tilebuf, from malloc (8-aligned).
+pixels.c:.*const uint16_t \*q = \(const uint16_t \*\) p;
+pixels.c:.*const uint32_t \*q = \(const uint32_t \*\) p;

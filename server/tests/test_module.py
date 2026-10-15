@@ -69,13 +69,18 @@ def messages(m, seq=[0]):
 
 
 def status(m):
-    a = m.ubuf(size=512, at=0x20000)
+    a = m.ubuf(size=1024, at=0x20000)
     m.entry(STATUS, a)
     # server_status: listening, connecting, connected, login_set, client[64],
-    # user[64], width, height, bpp, tiles_sent; then the module's fields
-    v = struct.unpack_from("<4i64s64s4I", bytes(m.mu.mem_read(a, 200)))
-    extra = struct.unpack_from("<iIIIi", bytes(m.mu.mem_read(a + struct.calcsize("<4i64s64s4I"), 20)))
+    # user[64], width, height, bpp, tiles_sent; (interface 4) at_login,
+    # hostname[32], protocol[32], security[96], screen[48], keepalive[64],
+    # sound[64], connected_s, kbytes_sent; then the module's fields
+    fmt = "<4i64s64s4Ii32s32s96s48s64s64s2I"
+    v = struct.unpack_from(fmt, bytes(m.mu.mem_read(a, struct.calcsize(fmt))))
+    extra = struct.unpack_from("<iIIIi", bytes(m.mu.mem_read(a + struct.calcsize(fmt), 20)))
+    text = lambda b: b.split(b"\0")[0].decode("latin-1")
     return dict(listening=v[0], connecting=v[1], connected=v[2], login_set=v[3],
+                screen=text(v[14]), kbytes=v[18],
                 errorbox=extra[0], callbacks=extra[1], errorbox_steps=extra[2],
                 heap=extra[3], dead=extra[4])
 
@@ -223,7 +228,7 @@ try:
     c = socket.create_connection(("127.0.0.1", port), timeout=2)
     run_for(m, 60)     # an idle server looks every 25 cs
     st = status(m)
-    check(m.sndbuf == 128 * 1024, "the client's send buffer: 256 KB refused, 128 KB taken (%d)" % m.sndbuf)
+    check(m.sndbuf == 32 * 1024, "the client's send buffer: 64 KB refused, 32 KB taken (%d)" % m.sndbuf)
     check(st["connecting"] == 1, "and a client is taken on (%r %r)" % (st, messages(m)[-300:]))
     c.close()
     run_for(m, 20)
@@ -278,7 +283,7 @@ check(status(m)["listening"] == 0, "stopped")
 check("stopped" in messages(m), "said so")
 check(m.final(1) is not None, "finalisation refused while the front end is attached and alive")
 check(m.final(0) is not None, "RMTidy (non-fatal) refused")
-m.entry(DETACH)
+m.entry(DETACH, 0)
 open_socks = len(m.sockets)
 check(not m.sockets, "every socket closed on stop, numbers 1 and 2 included (%s open)" % sorted(m.sockets))
 err = m.final(1)
@@ -300,7 +305,7 @@ set_file(m, LOGINS_PATH, b"")
 port = free_port()
 check(m.entry(START, options(m, port)) == 0, "started again (%s)" % messages(m))
 run_for(m, 10)
-m.entry(DETACH)
+m.entry(DETACH, 0)
 check(m.final(1) is None, "finalised again")
 
 # --- 9: another address -----------------------------------------------------
@@ -313,7 +318,7 @@ set_file(m2, KEYS_PATH, RSA)
 set_file(m2, LOGINS_PATH, b"")
 port = free_port()
 check(m2.entry(START, options(m2, port)) == 0, "and started there")
-m2.entry(DETACH)
+m2.entry(DETACH, 0)
 check(m2.final(1) is None, "finalised there")
 
 # --- 10: the front end goes without detaching (Service_WimpCloseDown) ------
@@ -329,6 +334,30 @@ m3.service(0, 0x53, 7)
 m3.alive_tasks = set()
 check(status(m3)["listening"] == 0, "the front end's Wimp_CloseDown stops the server")
 check(m3.final(1) is None, "and the module can then be killed")
+
+# --- 11: the desktop shutting down: DETACH with keep (0.2-test23) ------------
+m4 = RiscOS(MOD, base=RMA + 0xC000)
+m4.init()
+m4.alive_tasks = {9}
+m4.entry(ATTACH, 9)
+set_file(m4, INI_PATH, INI)
+set_file(m4, KEYS_PATH, RSA)
+set_file(m4, LOGINS_PATH, b"")
+port = free_port()
+m4.entry(START, options(m4, port))
+run_for(m4, 10)
+m4.entry(DETACH, 1)
+m4.service(0, 0x53, 9)                 # and then its Wimp_CloseDown
+m4.alive_tasks = set()
+run_for(m4, 10)
+msgs = messages(m4)
+check(status(m4)["listening"] == 1 and "the desktop is shutting down: serving on" in msgs,
+      "kept: serving on with no front end, past its Wimp_CloseDown (%r)" % msgs[-200:])
+m4.alive_tasks = {11}
+check(m4.entry(ATTACH, 11) == 0, "a new front end can attach")
+check(status(m4)["listening"] == 0, "and takes over: the old server stopped")
+m4.entry(DETACH, 0)
+check(m4.final(1) is None, "and the module can then be killed")
 
 print("RDPServer module (emulated ARM): %d checks, %d failed" % (checks, fails))
 sys.exit(1 if fails else 0)

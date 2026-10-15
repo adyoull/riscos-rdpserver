@@ -25,6 +25,7 @@ enum { Null_Reason = 0, Open_Window_Request = 2, Close_Window_Request = 3,
        User_Message = 17, User_Message_Recorded = 18 };
 enum { Button_Adjust = 1, Button_Menu = 2, Button_Select = 4 };
 #define Message_Quit 0
+#define Message_PreQuit 8
 
 /* What the front end needs to know. o is used for the server and kept
    (its port is changed from Choices). */
@@ -55,11 +56,14 @@ void wimp_close (void);
 /* Shows an error in a box. */
 void wimp_report (const char *text);
 
-/* The settings file: "port N" and "mute_local 0|1" lines. The readers
+/* The settings file: "port N", "mute_local 0|1" and "require_tls 0|1" lines. The readers
    return what was read, or def. */
 int wimp_read_port (const char *file, int def);
 int wimp_read_mute (const char *file, int def);
-int wimp_write_settings (const char *file, int port, int mute_local);
+int wimp_read_tls (const char *file, int def);
+int wimp_read_sound (const char *file, int def);
+int wimp_write_settings (const char *file, int port, int mute_local, int require_tls,
+                         int send_sound);
 
 /* All of it: wimp_init, the poll loop, wimp_close. Returns the exit
    status. */

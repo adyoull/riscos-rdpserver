@@ -11,6 +11,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
+#include <sys/stat.h>
 #include <kernel.h>
 #include <swis.h>
 
@@ -53,14 +55,22 @@
 #define POLL_MASK ((1 << 4) | (1 << 5) | (1 << 11) | (1 << 12))
 
 enum { W_STATUS, W_CHOICES, W_INFO, W_COUNT };
-#define MAX_ICONS 11
+#define MAX_ICONS 32
 #define TEXT_SIZE 160
 
-/* Status window lines. */
-enum { ST_STATE, ST_LOGIN, ST_SENT, ST_HEADING, ST_MSG0, ST_LINES = ST_MSG0 + 6 };
+/* Status window: a line saying what's happening, then the details (a
+   label and a value each), then the last messages. */
+enum { SD_CLIENT, SD_USER, SD_TIME, SD_PROTOCOL, SD_SECURITY, SD_SCREEN,
+       SD_KEEPALIVE, SD_SOUND, SD_SENT, SD_LOGIN, SD_COUNT };
+enum { ST_STATE, ST_LABEL0, ST_VALUE0 = ST_LABEL0 + SD_COUNT,
+       ST_HEADING = ST_VALUE0 + SD_COUNT, ST_MSG0, ST_LINES = ST_MSG0 + 6 };
+static const char *const detail_label[SD_COUNT] = {
+  "Client", "User", "Connected for", "Protocol", "Security", "Screen",
+  "Keep-alive", "Sound", "Sent", "Login"
+};
 /* Choices icons. */
 enum { CH_PORT_L, CH_PORT, CH_USER_L, CH_USER, CH_PASS_L, CH_PASS, CH_NOTE,
-       CH_CLEAR, CH_CANCEL, CH_SAVE, CH_MUTE, CH_COUNT };
+       CH_CLEAR, CH_CANCEL, CH_SAVE, CH_MUTE, CH_TLS, CH_SOUND, CH_COUNT };
 
 typedef struct
 {
@@ -84,7 +94,15 @@ static const wimp_setup *setup;
 static int task;
 static int running;            /* the server is listening */
 static char port_text[8];
-static int mute_shown;          /* the Choices option's state */
+static int mute_shown;          /* the Choices options' states */
+static int tls_shown;
+static int sound_shown;
+static int shutdown_seen;       /* the last PreQuit was the desktop shutting down */
+static unsigned shutdown_at;    /* when it came: the Quit must follow within
+                                   SHUTDOWN_CS, not after a shutdown that was
+                                   cancelled and some later Quit */
+#define SHUTDOWN_CS 3000
+static int quit_by_message;     /* we're quitting because of Message_Quit */
 static char bar_sprite[13] = "!rdpserver";
 static int bar_icon = -1, bar_on;
 static unsigned next_refresh;
@@ -198,29 +216,56 @@ wimp_read_port (const char *file, int def)
   return port;
 }
 
-/* "mute_local 0|1": mute this computer while a client listens. */
-int
-wimp_read_mute (const char *file, int def)
+/* A "name 0|1" line of the settings file, or def. */
+static int
+read_flag (const char *file, const char *name, int def)
 {
   FILE *f = fopen (file, "r");
   char line[64];
-  int on = def, v;
+  size_t n = strlen (name);
+  int on = def;
   if (!f)
     return def;
   while (fgets (line, sizeof line, f))
-    if (sscanf (line, "mute_local %d", &v) == 1 && (v == 0 || v == 1))
-      on = v;
+    if (strncmp (line, name, n) == 0 && line[n] == ' '
+        && (line[n + 1] == '0' || line[n + 1] == '1')
+        && (line[n + 2] == '\n' || line[n + 2] == '\r' || line[n + 2] == 0))
+      on = line[n + 1] - '0';
   fclose (f);
   return on;
 }
 
+/* "mute_local 0|1": mute this computer while a client listens. */
 int
-wimp_write_settings (const char *file, int port, int mute_local)
+wimp_read_mute (const char *file, int def)
+{
+  return read_flag (file, "mute_local", def);
+}
+
+/* "require_tls 0|1": refuse clients that don't use TLS. */
+int
+wimp_read_tls (const char *file, int def)
+{
+  return read_flag (file, "require_tls", def);
+}
+
+/* "send_sound 0|1": send this computer's sound to the client (off unless
+   chosen, 0.2-test22). */
+int
+wimp_read_sound (const char *file, int def)
+{
+  return read_flag (file, "send_sound", def);
+}
+
+int
+wimp_write_settings (const char *file, int port, int mute_local, int require_tls,
+                     int send_sound)
 {
   FILE *f = fopen (file, "w");
   if (!f)
     return -1;
-  fprintf (f, "port %d\nmute_local %d\n", port, mute_local != 0);
+  fprintf (f, "port %d\nmute_local %d\nrequire_tls %d\nsend_sound %d\n", port,
+           mute_local != 0, require_tls != 0, send_sound != 0);
   return fclose (f) == 0 ? 0 : -1;
 }
 
@@ -273,6 +318,21 @@ create_window (int w, const char *title, int x, int y, int width, int height,
 #define WF_PLAIN 0x84000012u
 #define WF_CLOSE 0x87000012u
 
+/* The row of the window each Status icon is on. */
+static int
+status_row (int i)
+{
+  if (i >= ST_LABEL0 && i < ST_VALUE0)
+    return 1 + i - ST_LABEL0;
+  if (i >= ST_VALUE0 && i < ST_HEADING)
+    return 1 + i - ST_VALUE0;
+  if (i >= ST_HEADING)
+    return 1 + SD_COUNT + i - ST_HEADING;
+  return 0;
+}
+
+#define ST_ROWS (2 + SD_COUNT + 6)
+
 static int
 create_status (void)
 {
@@ -280,14 +340,21 @@ create_status (void)
   int i;
   for (i = 0; i < ST_LINES; i++)
     {
-      ic[i].x0 = 16; ic[i].x1 = 1184;
-      ic[i].y1 = -16 - 44 * i; ic[i].y0 = ic[i].y1 - 40;
+      int row = status_row (i);
+      ic[i].x0 = 16; ic[i].x1 = 1384;
+      if (i >= ST_LABEL0 && i < ST_VALUE0)
+        ic[i].x1 = 300;
+      else if (i >= ST_VALUE0 && i < ST_HEADING)
+        ic[i].x0 = 316;
+      ic[i].y1 = -16 - 44 * row; ic[i].y0 = ic[i].y1 - 40;
       ic[i].flags = LABEL;
-      ic[i].text = i == ST_HEADING ? "Last messages:" : "";
+      ic[i].text = i == ST_HEADING ? "Last messages:"
+                   : i >= ST_LABEL0 && i < ST_VALUE0 ? detail_label[i - ST_LABEL0] : "";
       ic[i].valid = NULL;
+      ic[i].size = 0;
     }
-  return create_window (W_STATUS, "RDPServer status", 240, 900, 1200,
-                        32 + 44 * ST_LINES, WF_CLOSE, ic, ST_LINES);
+  return create_window (W_STATUS, "RDPServer status", 160, 900, 1400,
+                        32 + 44 * ST_ROWS, WF_CLOSE, ic, ST_LINES);
 }
 
 static int
@@ -301,13 +368,17 @@ create_choices (void)
     { 16, -180, 240, -132, LABEL, "Password", NULL, 0 },
     { 256, -180, 784, -132, WRITABLE, "", "D*;Ktar", 64 },
     { 16, -236, 784, -188, LABEL, "", NULL, 0 },
-    { 16, -372, 240, -304, BUTTON, "Clear login", "R5,3", 0 },
-    { 400, -372, 576, -304, BUTTON, "Cancel", "R5,3", 0 },
-    { 592, -372, 784, -304, BUTTON, "Save", "R6,3", 0 },
-    { 16, -292, 784, -244, OPTION, "Mute this computer while a client listens",
+    { 16, -484, 240, -416, BUTTON, "Clear login", "R5,3", 0 },
+    { 400, -484, 576, -416, BUTTON, "Cancel", "R5,3", 0 },
+    { 592, -484, 784, -416, BUTTON, "Save", "R6,3", 0 },
+    { 16, -348, 784, -300, OPTION, "Mute this computer while a client listens",
+      "Soptoff,opton", 0 },
+    { 16, -404, 784, -356, OPTION, "Only allow TLS connections (refuse RC4)",
+      "Soptoff,opton", 0 },
+    { 16, -292, 784, -244, OPTION, "Send this computer's sound to the client",
       "Soptoff,opton", 0 }
   };
-  return create_window (W_CHOICES, "RDPServer choices", 400, 800, 800, 388,
+  return create_window (W_CHOICES, "RDPServer choices", 400, 800, 800, 500,
                         WF_CLOSE, ic, CH_COUNT);
 }
 
@@ -357,6 +428,60 @@ login_note (void)
   set_text (W_CHOICES, CH_NOTE, t);
 }
 
+/* The details rows ("-" where there's nothing to say). */
+static void
+status_details (const server_status *st)
+{
+  char v[SD_COUNT][TEXT_SIZE];
+  int on = st->connected || st->connecting, i;
+
+  for (i = 0; i < SD_COUNT; i++)
+    snprintf (v[i], TEXT_SIZE, "-");
+  if (on)
+    {
+      if (st->hostname[0])
+        snprintf (v[SD_CLIENT], TEXT_SIZE, "%.63s (%.31s)", st->client, st->hostname);
+      else
+        snprintf (v[SD_CLIENT], TEXT_SIZE, "%.63s", st->client);
+      if (st->user[0])
+        snprintf (v[SD_USER], TEXT_SIZE, "%.63s", st->user);
+      if (st->connected)
+        {
+          unsigned s = st->connected_s;
+          if (s >= 3600)
+            snprintf (v[SD_TIME], TEXT_SIZE, "%u h %u min", s / 3600, s / 60 % 60);
+          else if (s >= 60)
+            snprintf (v[SD_TIME], TEXT_SIZE, "%u min %u s", s / 60, s % 60);
+          else
+            snprintf (v[SD_TIME], TEXT_SIZE, "%u s", s);
+        }
+      if (st->protocol[0])
+        snprintf (v[SD_PROTOCOL], TEXT_SIZE, "%.31s", st->protocol);
+      if (st->security[0])
+        snprintf (v[SD_SECURITY], TEXT_SIZE, "%.95s", st->security);
+      if (st->keepalive[0])
+        snprintf (v[SD_KEEPALIVE], TEXT_SIZE, "%.63s", st->keepalive);
+      if (st->sound[0])
+        snprintf (v[SD_SOUND], TEXT_SIZE, "%.63s", st->sound);
+    }
+  if (st->screen[0])
+    {
+      if (st->connected && st->bpp)
+        snprintf (v[SD_SCREEN], TEXT_SIZE, "%.47s; the client %d bpp", st->screen, st->bpp);
+      else
+        snprintf (v[SD_SCREEN], TEXT_SIZE, "%.47s", st->screen);
+    }
+  if (st->kbytes_sent >= 10240)
+    snprintf (v[SD_SENT], TEXT_SIZE, "%u MB, %u screen pieces", st->kbytes_sent / 1024, st->tiles_sent);
+  else
+    snprintf (v[SD_SENT], TEXT_SIZE, "%u KB, %u screen pieces", st->kbytes_sent, st->tiles_sent);
+  snprintf (v[SD_LOGIN], TEXT_SIZE, "%s", st->login_set
+            ? "Set in Choices (or given at the login screen)"
+            : "None set: anyone on your network can connect");
+  for (i = 0; i < SD_COUNT; i++)
+    set_text (W_STATUS, ST_VALUE0 + i, v[i]);
+}
+
 static void
 refresh (void)
 {
@@ -370,15 +495,14 @@ refresh (void)
   else if (st.connected)
     snprintf (t, sizeof t, "Connected: %.40s (%.30s), %d x %d, %d bpp", st.client,
               st.user[0] ? st.user : "no user name", st.width, st.height, st.bpp);
+  else if (st.at_login)
+    snprintf (t, sizeof t, "At the login screen: %.63s", st.client);
   else if (st.connecting)
     snprintf (t, sizeof t, "Connecting: %.63s", st.client);
   else
     snprintf (t, sizeof t, "Waiting for a client on port %s", port_text);
   set_text (W_STATUS, ST_STATE, t);
-  set_text (W_STATUS, ST_LOGIN, st.login_set ? "Clients must give the user name and password set in Choices."
-                                              : "No login set: anyone on your network can connect.");
-  snprintf (t, sizeof t, "Screen pieces sent: %u", st.tiles_sent);
-  set_text (W_STATUS, ST_SENT, t);
+  status_details (&st);
   for (i = 0; i < RING; i++)
     set_text (W_STATUS, ST_MSG0 + i, ring[(ring_next + i) % RING]);
 
@@ -403,17 +527,55 @@ open_window (int w)
   fail (_swix (Wimp_OpenWindow, _IN (1), b));
 }
 
-/* Shows the option on or off. */
+/* Shows an option on or off. */
+static void
+show_option (int icon, int *shown, int on)
+{
+  int b[4];
+  *shown = on != 0;
+  if (win[W_CHOICES].handle == -1)
+    return;
+  b[0] = win[W_CHOICES].handle; b[1] = icon;
+  b[2] = *shown ? IF_SELECTED : 0; b[3] = IF_SELECTED;       /* EOR, clear */
+  _swix (Wimp_SetIconState, _IN (1), b);
+}
+
 static void
 show_mute (int on)
 {
+  show_option (CH_MUTE, &mute_shown, on);
+}
+
+static void
+show_tls (int on)
+{
+  show_option (CH_TLS, &tls_shown, on);
+}
+
+/* Muting this computer only means something while sound goes to the
+   client: shaded when it doesn't. */
+static void
+show_sound (int on)
+{
   int b[4];
-  mute_shown = on != 0;
+  show_option (CH_SOUND, &sound_shown, on);
   if (win[W_CHOICES].handle == -1)
     return;
   b[0] = win[W_CHOICES].handle; b[1] = CH_MUTE;
-  b[2] = mute_shown ? IF_SELECTED : 0; b[3] = IF_SELECTED;   /* EOR, clear */
+  b[2] = sound_shown ? 0 : IF_SHADED; b[3] = IF_SHADED;
   _swix (Wimp_SetIconState, _IN (1), b);
+}
+
+/* TLS can be required only with a certificate to offer. */
+static int
+have_certificate (void)
+{
+  char key[300], cert[300];
+  snprintf (key, sizeof key, "%s/key.pem", plat_choices_dir ());
+  snprintf (cert, sizeof cert, "%s/cert.pem", plat_choices_dir ());
+  struct stat k, c;
+  /* (as the front end gives them to the module: both there, not empty) */
+  return stat (key, &k) == 0 && stat (cert, &c) == 0 && k.st_size > 0 && c.st_size > 0;
 }
 
 static void
@@ -422,6 +584,8 @@ fill_choices (void)
   auth_db db;
   set_text (W_CHOICES, CH_PORT, port_text);
   show_mute (setup->opt->mute_local);
+  show_tls (setup->opt->require_tls);
+  show_sound (setup->opt->send_sound);
   if (auth_load (setup->logins_file, &db) == 0 && db.count > 0)
     set_text (W_CHOICES, CH_USER, db.login[0].name);
   else
@@ -503,6 +667,14 @@ save_choices (void)
                    "let anyone connect).");
       return 1;
     }
+  if (tls_shown && !setup->opt->require_tls && !have_certificate ())
+    {
+      wimp_report ("RDPServer has no TLS certificate (Choices:RDPServer.cert.pem "
+                   "and key.pem), so with TLS required no client could connect. "
+                   "Quit and run RDPServer again to make one.");
+      show_tls (0);
+      return 1;
+    }
   if (user[0] && pass[0])
     {
       if (auth_set (setup->logins_file, user, pass) != 0)
@@ -515,22 +687,44 @@ save_choices (void)
       message ("login saved: clients must now log in");
     }
   forget_password ();
-  if (mute_shown != setup->opt->mute_local)
+  if (mute_shown != setup->opt->mute_local || tls_shown != setup->opt->require_tls
+      || sound_shown != setup->opt->send_sound)
     {
-      setup->opt->mute_local = mute_shown;
-      if (running)
-        server_set_mute (mute_shown);
-      message (mute_shown ? "this computer is muted while a client listens"
-                          : "this computer plays sound while a client listens");
+      if (sound_shown != setup->opt->send_sound)
+        {
+          setup->opt->send_sound = sound_shown;
+          if (running)
+            server_set_sound (sound_shown);
+          message (sound_shown ? "this computer's sound goes to clients from the next one"
+                               : "this computer's sound isn't sent to clients");
+        }
+      if (mute_shown != setup->opt->mute_local)
+        {
+          setup->opt->mute_local = mute_shown;
+          if (running)
+            server_set_mute (mute_shown);
+          message (mute_shown ? "this computer is muted while a client listens"
+                              : "this computer plays sound while a client listens");
+        }
+      if (tls_shown != setup->opt->require_tls)
+        {
+          setup->opt->require_tls = tls_shown;
+          if (running)
+            server_set_require_tls (tls_shown);
+          message (tls_shown ? "only TLS connections are allowed from now on"
+                             : "clients without TLS are allowed again (RC4)");
+        }
       if (p == atoi (port_text) && running
-          && wimp_write_settings (setup->settings_file, (int) p, mute_shown) != 0)
+          && wimp_write_settings (setup->settings_file, (int) p, mute_shown, tls_shown,
+                                  sound_shown) != 0)
         wimp_report ("The choice couldn't be saved in Choices: it's used until "
                      "RDPServer quits.");
     }
   /* A new port, or the same one again after it couldn't be used. */
   if (p != atoi (port_text) || !running)
     {
-      if (wimp_write_settings (setup->settings_file, (int) p, setup->opt->mute_local) != 0)
+      if (wimp_write_settings (setup->settings_file, (int) p, setup->opt->mute_local,
+                               setup->opt->require_tls, setup->opt->send_sound) != 0)
         wimp_report ("The port couldn't be saved in Choices: it's used until "
                      "RDPServer quits.");
       if (running)
@@ -633,6 +827,10 @@ wimp_event (int reason, int *b)
             clear_login ();
           else if (b[4] == CH_MUTE)
             show_mute (!mute_shown);
+          else if (b[4] == CH_TLS)
+            show_tls (!tls_shown);
+          else if (b[4] == CH_SOUND)
+            show_sound (!sound_shown);
         }
       break;
     case Key_Pressed:
@@ -674,7 +872,17 @@ wimp_event (int reason, int *b)
     case User_Message:
     case User_Message_Recorded:
       if (b[4] == Message_Quit)
-        return 1;
+        {
+          quit_by_message = 1;
+          return 1;
+        }
+      if (b[4] == Message_PreQuit)
+        /* A desktop shutdown, or just this task quitting (flags bit 0;
+           no flags word: a shutdown)? Not objected to either way. */
+        {
+          shutdown_seen = b[0] < 24 || !(b[5] & 1);
+          shutdown_at = plat_time_cs ();
+        }
       break;
     }
   return 0;
@@ -701,7 +909,7 @@ wimp_tick (void)
 int
 wimp_init (const wimp_setup *w)
 {
-  static const int messages[] = { 0 };   /* only Message_Quit */
+  static const int messages[] = { Message_PreQuit, 0 };   /* and Message_Quit */
   int i;
 
   setup = w;
@@ -710,12 +918,17 @@ wimp_init (const wimp_setup *w)
   bar_icon = -1;
   bar_on = 0;
   running = 0;
+  shutdown_seen = quit_by_message = 0;
   ring_next = 0;
   memset (ring, 0, sizeof ring);
   snprintf (bar_sprite, sizeof bar_sprite, "!rdpserver");
   snprintf (port_text, sizeof port_text, "%d", wimp_read_port (w->settings_file, 3389));
   w->opt->mute_local = wimp_read_mute (w->settings_file, 0);
   mute_shown = w->opt->mute_local;
+  w->opt->require_tls = wimp_read_tls (w->settings_file, 0);
+  tls_shown = w->opt->require_tls;
+  w->opt->send_sound = wimp_read_sound (w->settings_file, 0);
+  sound_shown = w->opt->send_sound;
   log_out = w->log_file ? fopen (w->log_file, "w") : NULL;
   server_set_message_hook (message);
 
@@ -734,7 +947,19 @@ wimp_init (const wimp_setup *w)
 void
 wimp_close (void)
 {
-  server_shutdown ();
+  /* Quitting as the desktop shuts down: the server carries on in the
+     module, so a client stays connected and can click Restart (Chris:
+     "Clicking on 'Shutdown' immediately disconnect and can't reconnect
+     to click on restart"). Any other quit stops it. */
+  if (quit_by_message && shutdown_seen && running
+      && (int) (plat_time_cs () - shutdown_at) < SHUTDOWN_CS)
+    {
+      message ("the desktop is shutting down: the server carries on, so a client "
+               "can restart this computer");
+      server_leave_running ();
+    }
+  else
+    server_shutdown ();
   running = 0;
   server_set_message_hook (NULL);
   if (log_out)

@@ -39,6 +39,11 @@ int rdps_cmd_start (const server_options *o);   /* 0, or 1: see the messages */
 void rdps_cmd_stop (void);
 int rdps_cmd_reload_logins (void);              /* 0 or -1 */
 int rdps_cmd_set_mute (int on);                 /* 0 or -1 */
+int rdps_cmd_set_require_tls (int on);          /* 0 or -1 */
+int rdps_cmd_set_sound (int on);                /* 0 or -1 */
+void rdps_cmd_restarting (void);                /* RISC OS about to reset */
+void rdps_cmd_shutdown_complete (void);         /* the desktop has shut down */
+int rdps_cmd_restart_done (void);               /* the client has been told */
 
 /* Drops the client at once, whatever it's doing (also mid-handshake):
    the socket is shut down here, so a wait in the thread ends, and the
@@ -58,6 +63,7 @@ extern unsigned rdps_yielded_cs;
    and bytes sent to clients in all (the module looks for progress). */
 extern int rdps_sndbuf;
 extern unsigned rdps_bytes_sent;
+extern int rdps_sndbuf_want;
 
 /* 1 while the client is being dropped or the server stopped: libxrdp's
    waits end (server.c's is_term). */

@@ -189,7 +189,12 @@ static const _kernel_oserror *readvarval (int swi, int r[10])
 }
 
 /* OS_Byte 121 (one key, X = internal key EOR &80) and 202. */
-static int held[3], kbstatus = 0x30, byte202_r2 = -1;
+static int held[3], kbstatus = 0x30, byte202_r2 = -1, byte138_r1 = -1, byte138_r2 = -1;
+static char inserted[64];               /* the bytes OS_Byte 138 put in, "I" for
+                                           interrupts off, "i" on again */
+static int kb_used, ints_off;
+static const _kernel_oserror *intoff (int swi, int r[10]) { (void) swi; (void) r; ints_off = 1; strcat (inserted, "I "); return NULL; }
+static const _kernel_oserror *inton (int swi, int r[10]) { (void) swi; (void) r; ints_off = 0; strcat (inserted, "i "); return NULL; }
 static const _kernel_oserror *byte (int swi, int r[10])
 {
   (void) swi;
@@ -207,6 +212,35 @@ static const _kernel_oserror *byte (int swi, int r[10])
       if (r[1] != 0 || r[2] != 0xff)
         abort ();          /* must only read, never change it */
       r[1] = kbstatus;
+      return NULL;
+    }
+  if (r[0] == 138)
+    {
+      byte138_r1 = r[1];
+      byte138_r2 = r[2];
+      snprintf (inserted + strlen (inserted), sizeof inserted - strlen (inserted), "%s%02X ",
+                ints_off ? "" : "!", r[2] & 0xFF);
+      kb_used++;
+      return NULL;
+    }
+  if (r[0] == 128)
+    {
+      if (r[1] != 255)
+        abort ();          /* only the keyboard buffer's count */
+      r[1] = kb_used & 0xFF;
+      r[2] = kb_used >> 8;
+      return NULL;
+    }
+  if (r[0] == 71 && r[1] == 127)
+    {
+      r[1] = 111;          /* the alphabet: UTF8 */
+      return NULL;
+    }
+  if (r[0] == 71)
+    {
+      if (r[1] != 255)
+        abort ();          /* must only read the keyboard number */
+      r[1] = 34;           /* the Netherlands */
       return NULL;
     }
   abort ();
@@ -277,6 +311,22 @@ static void test_clicks (void)
   CHECK (plat_click (0x70, 2) == -1, "and it doesn't keep trying");
 }
 
+/* ColourTrans_ReadPalette: 4 entries, &BBGGRR00 */
+static int ctrp_r[5], ctrp_fail;
+static const _kernel_oserror no_ct = { 0x1, "ColourTrans not there" };
+static const _kernel_oserror *readpalette (int swi, int r[10])
+{
+  static const uint32_t pal[4] = { 0x00000000u, 0x0000FF00u, 0x00FF0000u, 0x563412F0u };
+  (void) swi;
+  memcpy (ctrp_r, r, sizeof ctrp_r);
+  if (ctrp_fail)
+    return &no_ct;
+  memcpy ((void *) (intptr_t) r[2], pal, sizeof pal);
+  r[2] += 4;      /* R2 "incremented by words written": not relied on */
+  r[3] -= (int) sizeof pal;
+  return NULL;
+}
+
 int main (void)
 {
   rdps_screen s;
@@ -288,11 +338,14 @@ int main (void)
   fake_swi (OS_SetVarVal, "OS_SetVarVal", setvarval);
   fake_swi (OS_ReadVarVal, "OS_ReadVarVal", readvarval);
   fake_swi (OS_Byte, "OS_Byte", byte);
+  fake_swi (OS_IntOff, "OS_IntOff", intoff);
+  fake_swi (OS_IntOn, "OS_IntOn", inton);
   fake_swi (OS_Module, "OS_Module", module);
   fake_swi (OS_SynchroniseCodeAreas, "OS_SynchroniseCodeAreas", sync_code);
   fake_swi (OS_CallAfter, "OS_CallAfter", callafter);
   fake_swi (OS_RemoveTickerEvent, "OS_RemoveTickerEvent", remove_ev);
   fake_swi (OS_RemoveCallBack, "OS_RemoveCallBack", remove_ev);
+  fake_swi (ColourTrans_ReadPalette, "ColourTrans_ReadPalette", readpalette);
 
   CHECK (plat_screen (&s) == NULL, "the screen is read");
   CHECK (s.width == 1920 && s.height == 1080, "1920 x 1080 from the window limits");
@@ -304,6 +357,21 @@ int main (void)
   CHECK (plat_screen (&s) == NULL && s.redirected && s.base == screen,
          "output to a sprite: redirected, and base still DisplayStart");
   redirect = 0;
+
+  {
+    uint32_t pal[256];
+    memset (pal, 0x77, sizeof pal);
+    CHECK (plat_palette (pal) == 4, "the palette: 4 entries read");
+    CHECK (ctrp_r[0] == -1 && ctrp_r[1] == -1 && ctrp_r[4] == 0 && ctrp_r[3] == 1024,
+           "ColourTrans_ReadPalette: current mode and palette, a 256-word buffer, no flags");
+    CHECK (pal[0] == 0 && pal[1] == 0xff0000 && pal[2] == 0x00ff00 && pal[3] == 0x123456,
+           "&BBGGRR00 to 0x00RRGGBB");
+    CHECK (pal[4] == 0x77777777, "entries past those read untouched");
+    ctrp_fail = 1;
+    CHECK (plat_palette (pal) == 0, "an error: none");
+    ctrp_fail = 0;
+  }
+  CHECK (plat_keyboard () == 34, "the keyboard layout: OS_Byte 71, 255 (read)");
 
   /* Top-left pixel (0,0) is the top of the screen: OS y = (1080-1) << 2. */
   plat_mouse_to (&s, 0, 0);
@@ -318,6 +386,21 @@ int main (void)
   CHECK (keyv_calls == 1 && keyv_r0 == 2 && keyv_r1 == 0x70, "Select pressed: KeyV 2, &70");
   plat_key (0x3C, 0);
   CHECK (keyv_r0 == 1 && keyv_r1 == 0x3C, "A released: KeyV 1, &3C");
+
+  inserted[0] = 0;
+  CHECK (plat_char ('h') == 0 && byte138_r1 == 0 && strcmp (inserted, "I 68 i ") == 0
+         && keyv_calls == 2, "a character: OS_Byte 138 into buffer 0 (the keyboard), not KeyV");
+  inserted[0] = 0;
+  CHECK (plat_char (0xFC) == 0 && strcmp (inserted, "I 00 FC i ") == 0,
+         "a top-bit one goes in as 0 then it (not Ctrl-Shift-F12), interrupts off between");
+  inserted[0] = 0;
+  CHECK (plat_char (0) == 0 && strcmp (inserted, "I 00 00 i ") == 0, "and so does 0");
+  kb_used = 29;
+  inserted[0] = 0;
+  CHECK (plat_char ('x') == -1 && strcmp (inserted, "I i ") == 0,
+         "the keyboard buffer nearly full: nothing put in, -1");
+  kb_used = 0;
+  CHECK (plat_alphabet () == 111, "the alphabet: OS_Byte 71, 127");
 
   plat_wheel (-2, 1);
   CHECK (ptrv_calls == 1 && ptrv_r[0] == 9 && ptrv_r[1] == -2 && ptrv_r[2] == 0

@@ -17,6 +17,7 @@ commands written to OUTDIR/ctl (one per line, read as they appear):
   mode WxH    a pretend mode change (new size, the screen moves)
   disconnect  the front end's Disconnect (drops the client at once)
   mute N      Choices' "mute this computer while a client listens" (0/1)
+  requiretls N  Choices' "only allow TLS connections" (0/1)
   takesound   another program takes SoundDMA's linear handler over
   stop        stop and exit
 
@@ -30,7 +31,7 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from modemu import RiscOS, RMA, SW, SH, Fatal  # noqa: E402
 
-ATTACH, DETACH, SET_FILE, START, STOP, DISCONNECT, RELOAD, STATUS, MESSAGES, SET_MUTE = range(10)
+ATTACH, DETACH, SET_FILE, START, STOP, DISCONNECT, RELOAD, STATUS, MESSAGES, SET_MUTE, SET_TLS, SET_SOUND = range(12)
 MOD, KEYS, PORT, OUT = sys.argv[1], sys.argv[2], int(sys.argv[3]), sys.argv[4]
 SECONDS = float(sys.argv[5]) if len(sys.argv) > 5 else 600
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -68,8 +69,15 @@ set_file(INI_PATH, open(os.path.join(HERE, "..", "app", "!RDPServer", "xrdp.ini"
 set_file(KEYS_PATH, open(os.path.join(KEYS, "rsakeys.ini"), "rb").read())
 logins = os.path.join(KEYS, "logins")
 set_file(LOGINS_PATH, open(logins, "rb").read() if os.path.exists(logins) else b"")
-opts = struct.pack("<8s64s256s256sIIIiii", str(PORT).encode(), b"", INI_PATH, LOGINS_PATH,
-                   10, 25, 3000, 128, 1, int(os.environ.get("EMU_MUTE", "0")))
+# TLS's key and certificate, as the front end gives them (EMU_NO_TLS: none,
+# so clients get Standard RDP Security)
+if not os.environ.get("EMU_NO_TLS") and os.path.exists(os.path.join(KEYS, "cert.pem")):
+    set_file(b"<RDPServer$Choices>/key.pem", open(os.path.join(KEYS, "key.pem"), "rb").read())
+    set_file(b"<RDPServer$Choices>/cert.pem", open(os.path.join(KEYS, "cert.pem"), "rb").read())
+opts = struct.pack("<8s64s256s256sIIIiiiii", str(PORT).encode(), b"", INI_PATH, LOGINS_PATH,
+                   10, 25, 3000, 128, 1, int(os.environ.get("EMU_MUTE", "0")),
+                   int(os.environ.get("EMU_REQUIRE_TLS", "0")),
+                   int(os.environ.get("EMU_SOUND", "1")))
 seq = [0]
 
 
@@ -84,7 +92,7 @@ def pump_messages():
 
 
 def status():
-    a = m.ubuf(size=512, at=0x20000)
+    a = m.ubuf(size=1024, at=0x20000)
     m.entry(STATUS, a)
     v = struct.unpack_from("<4i", bytes(m.mu.mem_read(a, 16)))
     return v
@@ -187,6 +195,17 @@ try:
                         # SharedSound puts itself back as SoundDMA's linear
                         # handler (as after a sound configuration change)
                         m.lin = (m.ss_code, 0x55AA)
+                    elif cmd.startswith("requiretls "):
+                        say("require TLS: %d" % m.entry(SET_TLS, int(cmd.split()[1])))
+                    elif cmd == "shutdowncomplete":
+                        m.service(0, 0x80)
+                        say("shutdown complete sent")
+                    elif cmd == "prereset":
+                        t0 = time.monotonic()
+                        m.service(0, 0x45)
+                        say("prereset done in %.0f ms" % ((time.monotonic() - t0) * 1000))
+                    elif cmd.startswith("sound "):
+                        say("sound: %d" % m.entry(SET_SOUND, int(cmd.split()[1])))
                     elif cmd.startswith("mute "):
                         say("mute: %d" % m.entry(SET_MUTE, int(cmd.split()[1])))
                     elif cmd == "status":

@@ -29,7 +29,8 @@ static int loaded = 1, attach_answer, start_answer, connected;
 static int calls[RDPS_MOD_ENTRIES];
 static void *last_ws;
 static int attached_task;
-static char files[3][300], file_data[3][300];
+static char files[8][300], file_data[8][300];
+static int file_null[8];
 static int nfiles;
 static rdps_mod_options started;
 static const char *pending_messages;
@@ -37,13 +38,16 @@ static int killed;
 static char killed_name[32];
 
 static int m_attach (int task, int b, int c) { (void) b; (void) c; attached_task = task; return attach_answer; }
-static int m_detach (int a, int b, int c) { (void) a; (void) b; (void) c; return 0; }
+static int detach_arg = -1;
+static int m_detach (int a, int b, int c) { (void) b; (void) c; detach_arg = a; return 0; }
 static int m_set_file (int path, int data, int len)
 {
-  if (nfiles < 3)
+  if (nfiles < 8)
     {
       snprintf (files[nfiles], sizeof files[0], "%s", (const char *) (intptr_t) path);
-      snprintf (file_data[nfiles], sizeof file_data[0], "%.*s", len, (const char *) (intptr_t) data);
+      file_null[nfiles] = data == 0;
+      snprintf (file_data[nfiles], sizeof file_data[0], "%.*s", data ? len : 0,
+                data ? (const char *) (intptr_t) data : "");
     }
   nfiles++;
   return 0;
@@ -72,6 +76,10 @@ static int m_status (int s, int b, int c)
 }
 static int mute_arg = -1;
 static int m_set_mute (int on, int b, int c) { (void) b; (void) c; mute_arg = on; return 0; }
+static int tls_arg = -1;
+static int m_set_tls (int on, int b, int c) { (void) b; (void) c; tls_arg = on; return 0; }
+static int sound_arg = -1;
+static int m_set_sound (int on, int b, int c) { (void) b; (void) c; sound_arg = on; return 0; }
 static int m_messages (int seqp, int buf, int size)
 {
   unsigned *seq = (unsigned *) (intptr_t) seqp;
@@ -86,7 +94,8 @@ static int m_messages (int seqp, int buf, int size)
 
 typedef int entry_fn (int, int, int);
 static entry_fn *const fns[RDPS_MOD_ENTRIES] = {
-  m_attach, m_detach, m_set_file, m_start, m_stop, m_disconnect, m_reload, m_status, m_messages, m_set_mute };
+  m_attach, m_detach, m_set_file, m_start, m_stop, m_disconnect, m_reload, m_status, m_messages, m_set_mute, m_set_tls,
+  m_set_sound };
 
 /* modcall.s, here in C */
 int
@@ -195,6 +204,8 @@ main (void)
   o.logins = logins;
   o.interval_cs = 10;
   o.mute_local = 1;
+  o.require_tls = 1;
+  o.send_sound = 1;
   o.rows_per_scan = 128;
   o.verbose = 1;
   o.log_file = xlog;
@@ -214,7 +225,7 @@ main (void)
   loaded = 1;
   module.table.version = 1;
   module.table.entries = 9;
-  CHECK (server_start (&o) == 1 && strstr (server_start_error (), "has interface 1,9; this !RDPServer needs 2,10"),
+  CHECK (server_start (&o) == 1 && strstr (server_start_error (), "has interface 1,9; this !RDPServer needs 6,12"),
          "an older module (test10's): both versions said");
   module.table.entries = RDPS_MOD_ENTRIES;
   module.table.version = 99;
@@ -234,15 +245,18 @@ main (void)
   CHECK (server_start_error () == NULL, "no error");
   CHECK (attached_task == 0x4C0, "attached with our task handle");
   CHECK (last_ws == &ws_word, "every call has R12 = the module's workspace");
-  CHECK (nfiles == 3 && strcmp (files[0], ini) == 0 && strstr (file_data[0], "security_layer"),
+  CHECK (nfiles == 5 && strcmp (files[0], ini) == 0 && strstr (file_data[0], "security_layer"),
          "xrdp.ini given to the module under its name");
   CHECK (strcmp (files[1], keys) == 0 && strstr (file_data[1], "pub_exp"),
          "rsakeys.ini given");
   CHECK (strcmp (files[2], logins) == 0 && file_data[2][0] == 0,
          "no logins file: an empty one given");
+  CHECK (strstr (files[3], "/key.pem") && file_null[3] && strstr (files[4], "/cert.pem")
+         && file_null[4], "no TLS certificate: key.pem and cert.pem forgotten (no TLS)");
   CHECK (strcmp (started.port, "3390") == 0 && strcmp (started.ini, ini) == 0
          && strcmp (started.logins, logins) == 0 && started.interval_cs == 10
-         && started.rows_per_scan == 128 && started.verbose == 1 && started.mute_local == 1,
+         && started.rows_per_scan == 128 && started.verbose == 1 && started.mute_local == 1
+         && started.require_tls == 1 && started.send_sound == 1,
          "the options passed");
 
   /* Messages: the server's to the hook, libxrdp's to XrdpLog */
@@ -271,9 +285,35 @@ main (void)
          "new logins: the file again, then reload");
   server_set_mute (0);
   CHECK (calls[RDPS_MOD_SET_MUTE] == 1 && mute_arg == 0, "Choices' mute goes to the module");
+  server_set_require_tls (0);
+  CHECK (calls[RDPS_MOD_SET_REQUIRE_TLS] == 1 && tls_arg == 0, "and its TLS choice");
+  server_set_sound (0);
+  CHECK (calls[RDPS_MOD_SET_SOUND] == 1 && sound_arg == 0, "and its sound choice");
   server_finish ();
   CHECK (calls[RDPS_MOD_STOP] == 1, "server_finish stops it");
   CHECK (calls[RDPS_MOD_DETACH] == 0 && killed == 0, "but keeps the module");
+
+  /* With TLS's key and certificate: both given */
+  {
+    char k[128], c[128];
+    snprintf (k, sizeof k, "%s/key.pem", dir);
+    snprintf (c, sizeof c, "%s/cert.pem", dir);
+    write_file (k, "-----BEGIN RSA PRIVATE KEY-----\n");
+    write_file (c, "-----BEGIN CERTIFICATE-----\n");
+    nfiles = 0;
+    CHECK (server_start (&o) == 0 && nfiles == 5 && strcmp (files[3], k) == 0 && !file_null[3]
+           && strstr (file_data[3], "PRIVATE KEY") && strcmp (files[4], c) == 0
+           && !file_null[4] && strstr (file_data[4], "CERTIFICATE"),
+           "key.pem and cert.pem given to the module under their names");
+    server_finish ();
+    remove (c);
+    write_file (k, "x");
+    nfiles = 0;
+    CHECK (server_start (&o) == 0 && file_null[3] && file_null[4],
+           "only one of them: neither given (no half-made TLS)");
+    server_finish ();
+    remove (k);
+  }
 
   /* A start the module refuses: its reason is in the messages */
   start_answer = 1;
@@ -284,10 +324,25 @@ main (void)
   start_answer = 0;
 
   /* Quitting */
-  server_shutdown ();
-  CHECK (calls[RDPS_MOD_STOP] == 2 && calls[RDPS_MOD_DETACH] == 1, "quit: stop and detach");
+  {
+    int stops = calls[RDPS_MOD_STOP];
+    server_shutdown ();
+    CHECK (calls[RDPS_MOD_STOP] == stops + 1 && calls[RDPS_MOD_DETACH] == 1 && detach_arg == 0,
+           "quit: stop and detach (not keeping it running)");
+  }
   CHECK (killed == 1 && strcmp (killed_name, "RDPServer") == 0, "and the module is removed");
   CHECK (server_step (0) == 25, "nothing more to do after that");
+
+  /* The desktop shutting down (0.2-test23): detach, keeping it running */
+  CHECK (server_start (&o) == 0, "started again");
+  {
+    int stops = calls[RDPS_MOD_STOP], kills = killed, detaches = calls[RDPS_MOD_DETACH];
+    server_leave_running ();
+    CHECK (calls[RDPS_MOD_DETACH] == detaches + 1 && detach_arg == 1
+           && calls[RDPS_MOD_STOP] == stops && killed == kills,
+           "a shutdown: detach with keep, no stop, the module left loaded");
+  }
+  CHECK (server_step (0) == 25, "and nothing more to do");
 
   remove (ini);
   remove (keys);

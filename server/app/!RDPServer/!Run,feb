@@ -14,11 +14,12 @@ RMEnsure ARMEABISupport 0 IfThere System:Modules.ARMEABISupport Then RMLoad Syst
 RMEnsure ARMEABISupport 0 Error RDPServer needs the ARMEABISupport module. Install it with PackMan.
 RMEnsure CryptRandom 0.12 IfThere System:Modules.CryptRand Then RMLoad System:Modules.CryptRand
 RMEnsure CryptRandom 0.12 Error RDPServer needs the CryptRandom module (0.12 or later). Install it with PackMan.
-| The module: loaded here, removed again when RDPServer quits. Its memory
+| The module: loaded here, removed again when RDPServer quits (not when the
+| desktop shuts down: it serves on, so a client can restart). Its memory
 | is a dynamic area, "RDPServer" (a 1920x1080 32 bpp screen needs about
 | 9 MB for the copy of the screen).
-RMEnsure RDPServer 0.13 RMLoad <RDPServer$Dir>.RDPSMod
-RMEnsure RDPServer 0.13 Error RDPServer's module (RDPSMod) didn't load.
+RMEnsure RDPServer 0.25 RMLoad <RDPServer$Dir>.RDPSMod
+RMEnsure RDPServer 0.25 Error RDPServer's module (RDPSMod) didn't load.
 | An icon on the icon bar (Select: Status, Adjust: Choices, Menu: Info,
 | Status, Choices, Disconnect, Quit).
 | Test builds pass -v: every mouse button and wheel event, and Shift, Ctrl

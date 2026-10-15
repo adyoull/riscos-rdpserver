@@ -3,12 +3,13 @@
 #include <string.h>
 #include "input.h"
 
-enum { EV_DONE = 0, EV_MOVE = 1, EV_KEY, EV_WHEEL };
+enum { EV_DONE = 0, EV_MOVE = 1, EV_KEY, EV_WHEEL, EV_CHAR };
 
 void
 inq_init (inq *q)
 {
   memset (q, 0, sizeof *q);
+  q->click_cs = INQ_CLICK_CS;
 }
 
 static inq_event *
@@ -58,6 +59,13 @@ inq_key (inq *q, int ll, int down)
     return;
   q->wanted[ll] = (unsigned char) down;
   push (q, EV_KEY, ll, down);
+}
+
+void
+inq_char (inq *q, int c)
+{
+  if (c >= 0 && c <= 255)
+    push (q, EV_CHAR, c, 0);
 }
 
 /* Whole notches out of the accumulated rotation, rounding towards zero. */
@@ -157,7 +165,11 @@ inq_run (inq *q, unsigned now, const inq_sink *s)
       inq_event *e = slot (q, 0);
       if (e->kind == EV_KEY)
         {
-          int press = is_button (e->a) && e->b;
+          /* plain: buttons as keys, down and up as they come (as before
+             0.2-test4); otherwise a button-down waits for its up and goes
+             as one click */
+          int button_down = is_button (e->a) && e->b;
+          int press = button_down && !q->plain;
           if (press)
             {
               if (!e->seen)
@@ -173,7 +185,7 @@ inq_run (inq *q, unsigned now, const inq_sink *s)
           /* Pacing. Nothing is held yet for a button-down's own wait, so
              returning is fine; once a button is down with its up queued,
              wait here instead. */
-          while ((press && q->moved && (int) (now - q->last_move) < INQ_AFTER_MOVE_CS)
+          while ((button_down && q->moved && (int) (now - q->last_move) < INQ_AFTER_MOVE_CS)
                  || (q->changed && (int) (now - q->last_change) < INQ_BETWEEN_CS))
             {
               if (!q->holding || !s->now)
@@ -191,7 +203,7 @@ inq_run (inq *q, unsigned now, const inq_sink *s)
                  (or plat_click_finish) lets go of it. */
               q->applied[e->a] = 0;
               q->clicked = 1;
-              q->last_change = now + INQ_CLICK_CS + 1;
+              q->last_change = now + (unsigned) q->click_cs + 1;
               q->changed = 1;
               q->head = (q->head + 1) % INQ_MAX;
               q->count--;
@@ -221,6 +233,8 @@ inq_run (inq *q, unsigned now, const inq_sink *s)
         }
       else if (e->kind == EV_WHEEL)
         s->wheel (s->ctx, e->a, e->b);
+      else if (e->kind == EV_CHAR && s->text && s->text (s->ctx, e->a) != 0)
+        return q->count;                /* the keyboard buffer is full */
       q->head = (q->head + 1) % INQ_MAX;
       q->count--;
     }

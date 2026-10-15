@@ -1,0 +1,26 @@
+diff -ruN a/common/xrdp_client_info.h b/common/xrdp_client_info.h
+--- a/common/xrdp_client_info.h	2026-10-14 18:26:42.781148111 +0100
++++ b/common/xrdp_client_info.h	2026-10-14 19:09:52.335483666 +0100
+@@ -272,6 +272,9 @@
+     int msgchannel_id;      /* the channel it was given; 0: none */
+     int rtt_replies;        /* RTT Measure Responses received */
+     int rtt_last_seq;       /* the last one's sequenceNumber */
++
++    /* RDPServer: TS_UD_CS_CORE's version (the client's RDP version) */
++    int rdp_client_version;
+ };
+ 
+ enum xrdp_encoder_flags
+diff -ruN a/libxrdp/xrdp_sec.c b/libxrdp/xrdp_sec.c
+--- a/libxrdp/xrdp_sec.c	2026-10-14 18:26:42.783999072 +0100
++++ b/libxrdp/xrdp_sec.c	2026-10-14 19:09:52.334657337 +0100
+@@ -2092,6 +2092,9 @@
+         return 1;
+     }
+     in_uint32_le(s, version);
++    /* RDPServer: kept, for the Status window (0x00080001 RDP 4, 4 RDP 5+,
++       5 on RDP 10.0, ...) */
++    client_info->rdp_client_version = version;
+     in_uint16_le(s, client_info->display_sizes.session_width);
+     in_uint16_le(s, client_info->display_sizes.session_height);
+     /* RDPServer: the desktop is the RISC OS screen, whatever size the

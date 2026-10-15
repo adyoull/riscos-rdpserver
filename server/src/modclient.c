@@ -200,6 +200,31 @@ server_start (const server_options *o)
       say (start_error);
       return 1;
     }
+  {
+    /* TLS's key and certificate, if main.c could make them: given only if
+       both are there (an empty one would make libxrdp offer TLS and fail). */
+    char tk[300], tc[300];
+    char *dk, *dc;
+    int lk = 0, lc = 0;
+    snprintf (tk, sizeof tk, "%s/key.pem", plat_choices_dir ());
+    snprintf (tc, sizeof tc, "%s/cert.pem", plat_choices_dir ());
+    dk = slurp (tk, &lk);
+    dc = slurp (tc, &lc);
+    if (dk && dc && lk > 0 && lc > 0)
+      {
+        call (RDPS_MOD_SET_FILE, (int) tk, (int) dk, lk);
+        call (RDPS_MOD_SET_FILE, (int) tc, (int) dc, lc);
+      }
+    else
+      {
+        call (RDPS_MOD_SET_FILE, (int) tk, 0, 0);
+        call (RDPS_MOD_SET_FILE, (int) tc, 0, 0);
+      }
+    if (dk)
+      memset (dk, 0, (size_t) lk);
+    free (dk);
+    free (dc);
+  }
   memset (&mo, 0, sizeof mo);
   copy (mo.port, sizeof mo.port, o->port);
   copy (mo.address, sizeof mo.address, o->address);
@@ -211,6 +236,8 @@ server_start (const server_options *o)
   mo.rows_per_scan = o->rows_per_scan;
   mo.verbose = o->verbose;
   mo.mute_local = o->mute_local;
+  mo.require_tls = o->require_tls;
+  mo.send_sound = o->send_sound;
   if (call (RDPS_MOD_START, (int) &mo, 0, 0) != 0)
     {
       server_step (0);   /* its messages say why */
@@ -286,6 +313,20 @@ server_set_mute (int on)
 }
 
 void
+server_set_sound (int on)
+{
+  if (table && attached)
+    call (RDPS_MOD_SET_SOUND, on, 0, 0);
+}
+
+void
+server_set_require_tls (int on)
+{
+  if (table && attached)
+    call (RDPS_MOD_SET_REQUIRE_TLS, on, 0, 0);
+}
+
+void
 server_get_status (server_status *st)
 {
   static rdps_mod_status ms;
@@ -294,6 +335,25 @@ server_get_status (server_status *st)
     return;
   call (RDPS_MOD_STATUS, (int) &ms, 0, 0);
   *st = ms.st;
+}
+
+/* The desktop is shutting down: leave the module serving without us, so
+   a client can still use this computer (to click Restart). (0.2-test23) */
+void
+server_leave_running (void)
+{
+  if (!table)
+    return;
+  if (attached)
+    {
+      call (RDPS_MOD_DETACH, 1, 0, 0);
+      server_step (0);              /* its last messages, to the Log */
+      attached = 0;
+    }
+  table = NULL;
+  if (xrdp_log)
+    fclose (xrdp_log);
+  xrdp_log = NULL;
 }
 
 /* Quitting: stop, let go of the module, and remove it, so the next run

@@ -15,6 +15,8 @@
 set -u
 cd "$(dirname "$0")/.."
 OUT=$PWD/build/tests/e2e-module
+RDESKTOP=$PWD/tests/rdesktop-yes.sh   # accepts the server's new certificate
+export RDESKTOP_HOME=$PWD/build/tests/rdesktop-home
 PORT=${PORT:-33898}
 DISP=${DISP:-:96}
 rm -rf "$OUT"; mkdir -p "$OUT/keys"
@@ -63,7 +65,7 @@ quarters () {
 }
 
 # --- 1: a client, its picture and input --------------------------------
-rdesktop -u test -p x -a 32 -N localhost:$PORT >"$OUT/rdesktop-32.log" 2>&1 & CPID=$!
+$RDESKTOP -u test -p x -a 32 -N localhost:$PORT >"$OUT/rdesktop-32.log" 2>&1 & CPID=$!
 wait_for ups 1 60 && ok "rdesktop (32 bpp) connected" || bad "rdesktop didn't come up"
 sleep 3; shot rdesktop-32; quarters rdesktop-32
 grep -q "^clients 1$" "$OUT/input.log" && ok "RDPServer\$Clients set" || bad "RDPServer\$Clients not set"
@@ -161,7 +163,8 @@ u=$(ups)
 backs () { grep -c 'auto-reconnect: "test" is back' "$OUT/server.log"; }
 losts () { grep -c "the server was lost" "$OUT/server.log"; }
 b=$(backs); l=$(losts)
-xfreerdp3 /v:localhost:$PORT /u:test /p:x /sec:rdp /cert:ignore /bpp:32 /auto-reconnect \
+# over TLS (0.2-test14), as Windows App now connects
+xfreerdp3 /v:localhost:$PORT /u:test /p:x /sec:tls /cert:ignore /bpp:32 /auto-reconnect \
   /auto-reconnect-max-retries:10 >"$OUT/freerdp-arc.log" 2>&1 & CPID=$!
 for i in $(seq 1 30); do [ "$(ups)" -gt "$u" ] && break; sleep 1; done
 sleep 2
@@ -169,7 +172,7 @@ ctl unwind
 for i in $(seq 1 40); do [ "$(backs)" -gt "$b" ] && break; sleep 1; done
 [ "$(losts)" -gt "$l" ] && ok "the thread thrown away: the module started the server again" || bad "no restart after the thread was thrown away"
 [ "$(backs)" -gt "$b" ] && [ "$(ups)" -ge $((u + 2)) ] \
-  && ok "FreeRDP connected again by itself, with its auto-reconnect cookie" \
+  && ok "FreeRDP connected again by itself over TLS, with its auto-reconnect cookie" \
   || bad "no auto-reconnect ($(tail -3 "$OUT/freerdp-arc.log" | tr '\n' ' '))"
 sleep 3; shot freerdp-arc
 expect freerdp-arc 100,400 0,0,255 "after reconnecting: blue"
@@ -219,14 +222,106 @@ grep -q "sound after 5 s: [1-9][0-9]* blocks sent" "$OUT/server.log" \
   && ok "and a report 5 s in" || bad "no 5 s report"
 grep -q "sound after 5 s: output handler before ours &[0-9A-F]* (SharedSound's); SharedSound kept on" "$OUT/server.log" \
   && ok "the capture wrapped SharedSound's output handler" || bad "handler: $(grep 'output handler' "$OUT/server.log" | tail -1)"
+# Choices' "send this computer's sound to the client" (SET_SOUND,
+# 0.2-test22): off stops it at once; a client after that gets none.
+u=$(ups)
+xfreerdp3 /v:localhost:$PORT /u:test /p:x /sec:rdp /cert:ignore /bpp:32 /sound:sys:fake >"$OUT/freerdp-sound2.log" 2>&1 & CPID=$!
+for i in $(seq 1 30); do [ "$(ups)" -gt "$u" ] && break; sleep 1; done
+for i in $(seq 1 20); do [ "$(grep -c 'sound: to the client, 48000' "$OUT/server.log")" -gt "$n0" ] && break; sleep 0.5; done
+h1=$(grep -c 'emu: sound handlers: 1' "$OUT/server.log")
+ctl "sound 0"
+for i in $(seq 1 20); do grep -q "sound: stopped (Choices)" "$OUT/server.log" && break; sleep 0.5; done
+grep -q "emu: sound: 0" "$OUT/server.log" && grep -q "sound: stopped (Choices)" "$OUT/server.log" \
+  && ok "Choices' sound off reaches the module and stops the sound at once" || bad "sound off: $(grep 'emu: sound: \|stopped (Choices)' "$OUT/server.log" | tr '\n' ' ')"
+for i in $(seq 1 20); do [ "$(grep -c 'emu: sound handlers: 0' "$OUT/server.log")" -ge "$h1" ] && break; sleep 0.5; done
+[ "$(grep -c 'emu: sound handlers: 0' "$OUT/server.log")" -ge "$h1" ] \
+  && ok "and the handler is removed, the client still connected" || bad "handler left after sound off"
+kill $CPID 2>/dev/null; wait $CPID 2>/dev/null
+sleep 2
+u=$(ups)
+n1=$(grep -c "sound: to the client, 48000" "$OUT/server.log")
+xfreerdp3 /v:localhost:$PORT /u:test /p:x /sec:rdp /cert:ignore /bpp:32 /sound:sys:fake >"$OUT/freerdp-sound3.log" 2>&1 & CPID=$!
+for i in $(seq 1 30); do [ "$(ups)" -gt "$u" ] && break; sleep 1; done
+sleep 3
+grep -q "sound: not sent (Choices" "$OUT/server.log" && [ "$(grep -c 'sound: to the client, 48000' "$OUT/server.log")" -eq "$n1" ] \
+  && ok "with sound off, the next client gets none (and the log says why)" || bad "sound off, next client: $(grep 'sound' "$OUT/server.log" | tail -2 | tr '\n' ' ')"
+kill $CPID 2>/dev/null; wait $CPID 2>/dev/null
+ctl "sound 1"
+sleep 2
+
+# --- 5d: only TLS (Choices) -------------------------------------------------
+ctl "requiretls 1"
+sleep 1
+grep -q "emu: require TLS: 0" "$OUT/server.log" && ok "Choices' only-TLS reaches the module" || bad "requiretls entry: $(grep 'require TLS' "$OUT/server.log")"
+u=$(ups)
+timeout 20 xfreerdp3 /v:localhost:$PORT /u:test /p:x /sec:rdp /cert:ignore /bpp:32 >"$OUT/freerdp-rc4-refused.log" 2>&1
+sleep 2
+[ "$(ups)" -eq "$u" ] && grep -q "refused: it didn't ask for TLS" "$OUT/server.log" \
+  && ok "a client without TLS is refused (the server requires TLS)" || bad "RC4 client with TLS required: $(grep -i 'requires\|client up' "$OUT/server.log" | tail -2 | tr '\n' ' ')"
+xfreerdp3 /v:localhost:$PORT /u:test /p:x /sec:tls /cert:ignore /bpp:32 >"$OUT/freerdp-tls-only.log" 2>&1 & CPID=$!
+wait_for ups $((u + 1)) 60 && ok "a TLS client still comes in" || bad "TLS client refused too"
+kill $CPID 2>/dev/null; wait $CPID 2>/dev/null
+ctl "requiretls 0"
+sleep 2
 
 # --- 6: a wrong password --------------------------------------------------
 sleep 2
 u=$(ups)
-rdesktop -u test -p wrong -a 32 -N localhost:$PORT >"$OUT/wrongpw.log" 2>&1 & CPID=$!
-for i in $(seq 1 30); do grep -q "login refused" "$OUT/server.log" && break; sleep 1; done
+$RDESKTOP -u test -p wrong -a 32 -N localhost:$PORT >"$OUT/wrongpw.log" 2>&1 & CPID=$!
+for i in $(seq 1 60); do grep -q "the login screen for" "$OUT/server.log" && break; sleep 1; done
+sleep 5
+shot login
+g=$(gones)
 kill $CPID 2>/dev/null; wait $CPID 2>/dev/null
-grep -q 'login refused for "test"' "$OUT/server.log" && [ "$(ups)" -eq "$u" ] && ok "a wrong password is refused" || bad "a wrong password wasn't refused"
+wait_for gones $((g + 1)) 30
+grep -q 'the login screen for "test" (a wrong password sent)' "$OUT/server.log" && [ "$(ups)" -eq "$u" ] \
+  && ok "a wrong password: the login screen, not the desktop" || bad "a wrong password: $(grep -i 'login' "$OUT/server.log" | tail -2 | tr '\n' ' ')"
+grep -q "the login screen types with the UK keyboard layout (RISC OS keyboard 1)" "$OUT/server.log" \
+  && ok "its keyboard layout read from RISC OS (OS_Byte 71)" || bad "login keyboard: $(grep 'keyboard layout' "$OUT/server.log" | tail -1)"
+expect login 100,200 238,238,238 "the login panel, not the RISC OS screen"
+
+# --- 6b: the desktop shut down (Service_ShutdownComplete, 0.2-test25) -------
+# A click then may be the box's Restart: the page goes first, then the
+# click; no reset follows here, so after 5 s it's over.
+sleep 5
+u=$(ups)
+xfreerdp3 /v:localhost:$PORT /u:test /p:x /sec:tls /cert:ignore /bpp:32 /auto-reconnect \
+  /auto-reconnect-max-retries:30 >"$OUT/freerdp-shutdown.log" 2>&1 & CPID=$!
+wait_for ups $((u + 1)) 60 || bad "the client for the shutdown didn't come up"
+sleep 3
+ctl shutdowncomplete
+sleep 1
+xdotool mousemove 300 300 click 1 >/dev/null 2>&1
+for i in $(seq 1 20); do grep -q "RISC OS is restarting: the client was told so" "$OUT/server.log" && break; sleep 0.5; done
+sleep 1; shot shutdown-click
+grep -q "the desktop has shut down: a click from the client" "$OUT/server.log" \
+  && awk '/RISC OS is restarting: the client was told so/ && !p {p=NR} /click &70|KeyV down &70/ && p && !c {c=NR} END {exit !(p && c)}' "$OUT/server.log" \
+  && ok "Service_ShutdownComplete, then a click: the page went, then the click" || bad "shutdown click: $(grep -i 'shut down\|restarting\|click' "$OUT/server.log" | tail -3 | tr '\n' ' ')"
+expect shutdown-click 590,278 238,238,238 "the page, before the click reached RISC OS"
+for i in $(seq 1 20); do grep -q "no restart followed the page" "$OUT/server.log" && break; sleep 0.5; done
+grep -q "no restart followed the page" "$OUT/server.log" && ok "no reset followed: over after 5 s" || bad "the page state didn't end"
+# (FreeRDP reconnecting by itself ignores SIGTERM: then -9)
+kill $CPID 2>/dev/null; sleep 1; kill -9 $CPID 2>/dev/null; wait $CPID 2>/dev/null
+
+# --- 7: RISC OS restarting (Service_PreReset, 0.2-test24) -------------------
+# The page goes to the client before the reset; then the connection is
+# closed (as the reset would) without a Disconnect. (After it the
+# emulated server carries on with every socket closed under it, the
+# listener too: on RISC OS the reset follows at once.)
+sleep 5                         # (the wrong password above: 3 s of refusals)
+u=$(ups)
+xfreerdp3 /v:localhost:$PORT /u:test /p:x /sec:tls /cert:ignore /bpp:32 /auto-reconnect \
+  /auto-reconnect-max-retries:30 >"$OUT/freerdp-reset.log" 2>&1 & CPID=$!
+wait_for ups $((u + 1)) 60 || bad "the client for the restart didn't come up"
+sleep 3
+ctl prereset
+for i in $(seq 1 20); do grep -q "emu: prereset done" "$OUT/server.log" && break; sleep 0.5; done
+sleep 2; shot reset
+grep -q "RISC OS is restarting: the client was told so" "$OUT/server.log" && grep -q "emu: prereset done" "$OUT/server.log" \
+  && ok "Service_PreReset: the client is told, and the call returns" || bad "prereset: $(grep -i 'restart\|prereset' "$OUT/server.log" | tail -3 | tr '\n' ' ')"
+expect reset 100,400 42,51,69 "the restarting page's background"
+expect reset 590,278 238,238,238 "the restarting page's panel"
+kill $CPID 2>/dev/null; sleep 1; kill -9 $CPID 2>/dev/null; wait $CPID 2>/dev/null
 
 ctl stop
 wait $SPID; st=$?

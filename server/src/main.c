@@ -11,9 +11,13 @@
    its thread (srvthread.h), for the tests.
    -p  port to listen on (3389; the desktop version uses Choices)
    -a  address to listen on (every interface)
-   -i  time between screen scans, centiseconds (10)
-   -r  rows of the screen read each scan (0: all of them; the default
-       on the desktop is 128, so no one step holds the desktop up)
+   -i  time a pass over the screen takes, centiseconds (5; 10 reading
+       every row)
+   -r  the most rows of the screen read a turn (0: no limit; each turn
+       reads the rows due since the last)
+   -s  read 1 row in this many each pass (1, 2, 4, 8 or 16; 8), and the
+       rest of a tile where one changed. The Linux builds only: on RISC
+       OS, *Set RDPServer$SampleRows
    -t  stop after this many seconds (for tests)
    -g  pause this many centiseconds after each step, as the desktop
        version's poll loop does (for tests)
@@ -48,8 +52,12 @@
 static void
 on_signal (int sig)
 {
-  (void) sig;
-  server_stop = 1;
+  if (sig == SIGUSR2)
+    server_prereset = 1;
+  else if (sig == SIGUSR1)
+    server_shutdown_seen = 1;
+  else
+    server_stop = 1;
 }
 #endif
 
@@ -57,8 +65,10 @@ static int
 usage (void)
 {
   fprintf (stderr, "Usage: RDPServer [-p port] [-a address] [-i centiseconds] "
-           "[-r rows] [-t seconds] [-m] [-v]\n"
-           "       (-m: mute this computer while a client listens)\n"
+           "[-r rows] [-s 1|2|4|8|16] [-t seconds] [-sound] [-m] [-tls] [-v]\n"
+           "       (-sound: send this computer's sound to the client;\n"
+           "        -m: mute this computer while a client listens;\n"
+           "        -tls: refuse clients that don't use TLS)\n"
            "       RDPServer -setlogin NAME PASSWORD\n"
            "       RDPServer -clearlogin\n");
   return 2;
@@ -68,7 +78,7 @@ int
 main (int argc, char **argv)
 {
   server_options o;
-  char keys[512], ini[512], logins[512];
+  char keys[512], ini[512], logins[512], tls_key[512], tls_cert[512];
   int i;
 #ifdef __riscos
   char settings[512], logfile[512], xrdplog[512];
@@ -96,7 +106,7 @@ main (int argc, char **argv)
   memset (&o, 0, sizeof o);
   o.port = "3389";
   o.address = "";
-  o.interval_cs = 10;
+  o.interval_cs = 0;       /* the server's default */
   for (i = 1; i < argc; i++)
     {
       const char *a = argv[i];
@@ -105,6 +115,10 @@ main (int argc, char **argv)
         o.verbose = 1;
       else if (strcmp (a, "-m") == 0)
         o.mute_local = 1;
+      else if (strcmp (a, "-tls") == 0)
+        o.require_tls = 1;
+      else if (strcmp (a, "-sound") == 0)
+        o.send_sound = 1;
       else if (v && strcmp (a, "-p") == 0)
         o.port = argv[++i];
       else if (v && strcmp (a, "-a") == 0)
@@ -113,32 +127,35 @@ main (int argc, char **argv)
         o.interval_cs = (unsigned) atoi (argv[++i]);
       else if (v && strcmp (a, "-r") == 0)
         o.rows_per_scan = atoi (argv[++i]);
+      else if (v && strcmp (a, "-s") == 0)
+        o.sample_rows = atoi (argv[++i]);
       else if (v && strcmp (a, "-g") == 0)
         o.step_gap_cs = (unsigned) atoi (argv[++i]);
       else if (v && strcmp (a, "-t") == 0)
         o.max_seconds = atoi (argv[++i]);
+      else if (v && strcmp (a, "-silent") == 0)
+        o.silent_cs = (unsigned) atoi (argv[++i]);
+      else if (v && strcmp (a, "-stall") == 0)
+        o.stall_cs = (unsigned) atoi (argv[++i]);
       else
         return usage ();
     }
-  if (o.interval_cs == 0)
-    o.interval_cs = 1;
 
   snprintf (ini, sizeof ini, "%s/xrdp.ini", plat_resources_dir ());
   o.ini = ini;
   o.logins = logins;
   snprintf (keys, sizeof keys, "%s/rsakeys.ini", plat_choices_dir ());
+  snprintf (tls_key, sizeof tls_key, "%s/key.pem", plat_choices_dir ());
+  snprintf (tls_cert, sizeof tls_cert, "%s/cert.pem", plat_choices_dir ());
 #ifdef __riscos
     {
       /* The desktop front end. The server's messages go to Choices (Log,
-         and libxrdp's to XrdpLog) and the Status window. The screen is
-         read 128 rows at a time. */
+         and libxrdp's to XrdpLog) and the Status window. */
       wimp_setup w;
       snprintf (settings, sizeof settings, "%s/Settings", plat_choices_dir ());
       snprintf (logfile, sizeof logfile, "%s/Log", plat_choices_dir ());
       snprintf (xrdplog, sizeof xrdplog, "%s/XrdpLog", plat_choices_dir ());
       o.log_file = xrdplog;
-      if (o.rows_per_scan == 0)
-        o.rows_per_scan = 128;
       if (access (keys, R_OK) != 0)
         {
           /* Once only; it can take a minute. */
@@ -151,6 +168,10 @@ main (int argc, char **argv)
               return 1;
             }
         }
+      /* TLS's key and certificate, from that key (quick). Without them
+         clients get Standard RDP Security only. */
+      if (access (tls_key, R_OK) != 0 || access (tls_cert, R_OK) != 0)
+        rdps_make_tls_cert (keys, tls_key, tls_cert);
       signal (SIGPIPE, SIG_IGN);
       w.opt = &o;
       w.version = VERSION;
@@ -161,8 +182,7 @@ main (int argc, char **argv)
     }
 #else
 
-  printf ("RDPServer " VERSION ": a release candidate. Standard RDP Security only "
-          "(RC4, no TLS): use it on your own network.\n");
+  printf ("RDPServer " VERSION ": use it on your own network.\n");
 
   if (access (keys, R_OK) != 0)
     {
@@ -175,9 +195,15 @@ main (int argc, char **argv)
         }
       printf ("Done.\n");
     }
+  if ((access (tls_key, R_OK) != 0 || access (tls_cert, R_OK) != 0)
+      && rdps_make_tls_cert (keys, tls_key, tls_cert) != 0)
+    fprintf (stderr, "RDPServer: couldn't make the TLS certificate: Standard RDP "
+             "Security only\n");
 
   signal (SIGINT, on_signal);
   signal (SIGTERM, on_signal);
+  signal (SIGUSR2, on_signal);          /* a pretend reset (tests) */
+  signal (SIGUSR1, on_signal);          /* a pretend desktop shutdown (tests) */
   /* A client that resets mid-send must not kill the server. */
   signal (SIGPIPE, SIG_IGN);
   return server_run (&o);
