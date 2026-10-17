@@ -103,6 +103,12 @@ cap_copy_with (int way, void *dst, const void *src, size_t n)
 {
   if (way == CAP_COPY_WORDS)
     rdps_copy_words (dst, src, n);
+  else if (way == CAP_COPY_NEON && n >= 64)
+    {
+      size_t n64 = n & ~(size_t) 63;
+      plat_neon_copy (dst, src, (unsigned) n64);
+      rdps_copy_ldm8 ((char *) dst + n64, (const char *) src + n64, n - n64);
+    }
   else
     rdps_copy_ldm8 (dst, src, n);
 }
@@ -176,8 +182,8 @@ row_check (capture *c, const unsigned char *base, size_t stride, int y,
   return newly;
 }
 
-int
-cap_scan (capture *c, const unsigned char *base, size_t stride, int rows)
+static int
+scan (capture *c, const unsigned char *base, size_t stride, int rows)
 {
   int n, newly = 0;
 
@@ -208,8 +214,8 @@ sample_row (int sample, int phase)
   return r;
 }
 
-int
-cap_scan_sampled (capture *c, const unsigned char *base, size_t stride, int rows)
+static int
+scan_sampled (capture *c, const unsigned char *base, size_t stride, int rows)
 {
   int n, newly = 0, sample = c->sample;
   size_t piece = (size_t) CAP_TILE * c->bits / 8;
@@ -313,4 +319,28 @@ const unsigned char *
 cap_pixel (const capture *c, int x, int y)
 {
   return c->frame + (size_t) y * c->row_bytes + (size_t) x * c->bits / 8;
+}
+
+/* Reading the screen by NEON (0.2-test30): the module's VFP context is
+   switched to once around a whole scan (nothing in it lets other programs
+   run, so no task can be paged in meanwhile), and back. If it can't be,
+   the rows go by LDM 8 (cap_copy_with). */
+int
+cap_scan (capture *c, const unsigned char *base, size_t stride, int rows)
+{
+  int neon = cap_copy_way == CAP_COPY_NEON && plat_neon_enter () == 0, r;
+  r = scan (c, base, stride, rows);
+  if (neon)
+    plat_neon_leave ();
+  return r;
+}
+
+int
+cap_scan_sampled (capture *c, const unsigned char *base, size_t stride, int rows)
+{
+  int neon = cap_copy_way == CAP_COPY_NEON && plat_neon_enter () == 0, r;
+  r = scan_sampled (c, base, stride, rows);
+  if (neon)
+    plat_neon_leave ();
+  return r;
 }

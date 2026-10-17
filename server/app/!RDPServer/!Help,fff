@@ -1,4 +1,4 @@
-RDPServer 0.2-rc2 (release candidate)
+RDPServer 0.2-rc3 (release candidate)
 =====================================
 
 Lets you use this RISC OS desktop from another computer with Remote
@@ -102,9 +102,12 @@ client must ask for sound as well (Windows App, Remote Desktop Connection
 and FreeRDP do by default; rdesktop only with -r sound). Turning it off
 stops the sound at once; turning it on takes effect from the next client
 (also for the one connected, if it had sound and Choices stopped it).
-It's sent as it is, 16-bit stereo at the
-computer's own sample rate (about 1.5 Mbit/s at 48 kHz), so it suits a
-home network better than the internet. It reaches the client about a
+It's sent as 16-bit stereo at half the
+computer's sample rate while that's 22 kHz or more (44.1 kHz goes as
+22.05, 48 as 24: about 750 kbit/s), or at the full rate to a client
+that won't take that; *Set RDPServer$SoundRate 0 always sends the full
+rate (about 1.5 Mbit/s at 48 kHz). It suits a home network better than
+the internet, and a wired one better than Wi-Fi. It reaches the client about a
 third of a second late.
 
 The computer goes on playing it too, unless you also tick "Mute this
@@ -171,9 +174,12 @@ something waiting to go to it is disconnected (its program has stopped
 but its connection hasn't closed, as a RISC OS client's can).
 
 It writes a log, Choices:RDPServer.Log (and libxrdp's own, XrdpLog):
-connections, sound, every mouse button and wheel event, and Shift, Ctrl
-and Alt. Other keys are logged without saying which, so nothing you type
-is kept.
+start-up, connections, logins, security, sound, and anything slow. Tick
+"Detailed log (for reporting problems)" in Choices, from then on, for
+more: every mouse button and wheel event, Shift, Ctrl and Alt, the
+network checks, and figures every 5 seconds. Other keys are logged
+without saying which, so nothing you type is kept. The detailed log
+grows by about 200 KB an hour while a client is connected.
 A click goes to RISC OS when the client lets go of the button (or after
 a quarter of a second, if you hold it, or as soon as you drag); the
 button is then released 6 cs later by a ticker event, so double-clicks
@@ -209,8 +215,8 @@ What isn't done yet
 If it's slow
 ------------
 The Log says, when RDPServer starts, how fast this computer encrypts
-("TLS here: ..."), and every 5 seconds while a client is connected how
-much it sent ("... KB/s"). The client's connection asks the network
+("TLS here: ..."), and, with the detailed log, every 5 seconds while a
+client is connected how much it sent ("... KB/s"). The client's connection asks the network
 stack for a 64 KB send buffer; to try another size, *Set
 RDPServer$SendBuffer to it in KB (16 to 1024) and connect again (a big
 one can use up the stack's buffers: see MbufManager).
@@ -222,8 +228,8 @@ RDPServer finds what changed by reading the screen. A pass over it takes
 the rest of that 64 x 64 area at once: a change 8 rows tall or more is
 found in the pass it happens in, and every row is read once in 8 passes.
 At start-up the Log says how fast the screen can be read ("screen
-read: ..."); the 5-second figures say how long a pass took and how much
-was read.
+read: ..."); the 5-second figures (detailed log) say how long a pass
+took and how much was read.
 
 What changed is sent as compressed 64 x 64 bitmaps, and areas of one
 colour as fills (a few bytes each). At start-up the Log says how long
@@ -231,6 +237,15 @@ this computer takes to encode a whole screen like the middle of the one
 it shows ("encoding here: ..."): converting it to the client's colours,
 compressing it, and bulk compressing (MPPC, when the client asks for it).
 When a client connects, "updates: ..." says which of those it gets.
+In 32 bpp screen modes the pixels are converted by NEON where the
+processor has it (several times quicker), else by a simpler loop; at
+start-up the Log says how long each would take ("converting at ...
+other ways") and which is used ("converting by ..."). Each is used only
+if it made exactly the same pixels as the general way. The screen is
+read by NEON too if that's quicker ("screen read by ..."). NEON runs in
+RDPServer's own VFP context (VFPSupport), switched to and back around
+each piece of work, so programs using VFP or NEON themselves aren't
+disturbed.
 While a client is connected, anything that holds this computer up for
 10 cs or more is logged ("slow: ...").
 
@@ -239,7 +254,9 @@ To try other settings, *Set any of these and start RDPServer again:
                          1 reads every row, as in 0.2-rc1)
   RDPServer$ScanRows     the most rows read a turn (0: no limit)
   RDPServer$ScreenCopy   1 to read the screen a word at a time, 2 eight
-                         words at a time (normally the quicker is used)
+                         words at a time, 3 by NEON (normally the
+                         quickest is used)
+  RDPServer$NEON         0 not to use NEON at all
   RDPServer$Fills        0 to send areas of one colour as bitmaps
   RDPServer$BulkCompress 0 not to bulk compress (MPPC): more to send,
                          less work here
@@ -247,13 +264,25 @@ To try other settings, *Set any of these and start RDPServer again:
                          cs (2 to 50; 6)
   RDPServer$Clicks       0 to send mouse buttons down and up just as the
                          client does, not as one click
+  RDPServer$SoundRate    0 to send sound at the computer's own rate, not
+                         halved
+
+Memory
+------
+RDPServer keeps a copy of the screen (4 bytes a pixel in 32 bpp modes:
+about 9 MB at 1920 x 1080, 33 MB at 3840 x 2160) in a dynamic area of
+its own, "RDPServer", which grows as needed up to 128 MB; the login page
+needs as much again while it's shown. When a client comes up, the Log
+says how much RDPServer has. If RISC OS has no more to give it, the
+session ends and the Log says "out of memory": free some memory (quit
+programs), or use a screen mode with fewer pixels or colours.
 
 Reporting problems
 ------------------
 Please say which client you used (and its version), what you did and
 what happened, and attach Choices:RDPServer.Log and XrdpLog from that
-run (they start afresh each time RDPServer starts). They hold no
-passwords or typed text.
+run (they start afresh each time RDPServer starts), ideally with
+"Detailed log" ticked in Choices. They hold no passwords or typed text.
   https://github.com/adyoull/riscos-rdpserver/issues
 
 Command line

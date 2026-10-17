@@ -442,3 +442,27 @@ plat_sound_stop (void)
 {
   snd_on = 0;
 }
+
+/* No NEON here (the module only). */
+int plat_neon_start (void) { return 0; }
+int plat_neon_enter (void) { return -1; }
+void plat_neon_leave (void) { }
+void plat_neon_reset (void) { }
+void plat_neon_stop (void) { }
+int
+plat_neon_convert (int rgb, int client_bpp, void *dst, const void *src, unsigned pixels)
+{
+  (void) rgb; (void) client_bpp; (void) dst; (void) src; (void) pixels;
+  return -1;
+}
+void
+plat_neon_copy (void *dst, const void *src, unsigned bytes)
+{
+  (void) dst; (void) src; (void) bytes;
+}
+
+/* Memory: Linux's malloc. */
+int plat_memory_reserve (unsigned bytes) { (void) bytes; return 0; }
+int plat_memory_short (void) { return 0; }
+void plat_memory_info (unsigned *used_kb, unsigned *max_kb, int *refused)
+{ *used_kb = *max_kb = 0; *refused = 0; }

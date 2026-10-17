@@ -216,6 +216,15 @@ rdps_cmd_restart_done (void)
 }
 
 int
+rdps_cmd_set_verbose (int on)
+{
+  if (!ready || co_inside ())
+    return -1;
+  server_set_verbose (on);
+  return 0;
+}
+
+int
 rdps_cmd_set_sound (int on)
 {
   if (!ready || co_inside ())

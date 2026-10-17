@@ -40,6 +40,7 @@ void rdps_cmd_stop (void);
 int rdps_cmd_reload_logins (void);              /* 0 or -1 */
 int rdps_cmd_set_mute (int on);                 /* 0 or -1 */
 int rdps_cmd_set_require_tls (int on);          /* 0 or -1 */
+int rdps_cmd_set_verbose (int on);              /* 0 or -1 */
 int rdps_cmd_set_sound (int on);                /* 0 or -1 */
 void rdps_cmd_restarting (void);                /* RISC OS about to reset */
 void rdps_cmd_shutdown_complete (void);         /* the desktop has shut down */

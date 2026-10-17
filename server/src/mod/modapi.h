@@ -17,7 +17,7 @@
 
 #define RDPS_MOD_TITLE "RDPServer"
 #define RDPS_MOD_MAGIC 0x73504452u        /* "RDPs" */
-#define RDPS_MOD_INTERFACE 6  /* 6: DETACH can leave the server running */
+#define RDPS_MOD_INTERFACE 7  /* 7: SET_VERBOSE */
 #define RDPS_MOD_TABLE 0x34
 
 /* The entries, in the table's order. */
@@ -48,10 +48,12 @@ enum
   RDPS_MOD_SET_SOUND,     /* int (int on): send this computer's sound to the
                              client; off stops it now, on is from the next
                              client (0.2-test22) */
+  RDPS_MOD_SET_VERBOSE,   /* int (int on): the detailed log, from now
+                             (0.2-test26) */
   RDPS_MOD_ENTRIES
 };
 /* The same as a number, for the front end's interface tag (modclient.c) */
-#define RDPS_MOD_ENTRIES_N 12
+#define RDPS_MOD_ENTRIES_N 13
 typedef char rdps_mod_entries_n_check[RDPS_MOD_ENTRIES == RDPS_MOD_ENTRIES_N ? 1 : -1];
 
 typedef struct

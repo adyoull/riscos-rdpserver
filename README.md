@@ -3,12 +3,12 @@
 An RDP server for RISC OS, so the RISC OS desktop can be used from the
 Remote Desktop clients built into Windows, macOS, iOS, Android and Linux.
 
-**Status: release candidate (0.2-rc2).** Runs on a
+**Status: release candidate (0.2-rc3).** Runs on a
 Raspberry Pi 4 with RISC OS 5, used from Windows App on a Mac; also
 tested from rdesktop and FreeRDP on Linux.
 What's here:
 
-- `server/`: **RDPServer 0.2-rc2**, built on xrdp's libxrdp. The server
+- `server/`: **RDPServer 0.2-rc3**, built on xrdp's libxrdp. The server
   is a relocatable module (`src/mod`), so it keeps going while the desktop
   doesn't multitask (a Wimp error box, a program holding the machine, or
   one stopped with Alt-Break: the server restarts and clients reconnect
@@ -20,13 +20,14 @@ What's here:
   areas of one colour as fills (OpaqueRect),
   from any RISC OS screen mode (2 to 256 colours through the palette,
   4096, 32K, 64K and 16M colours, RGB or BGR),
-  mouse, scroll wheel and keyboard, sound to the client if chosen in Choices (RDPSND, PCM),
+  mouse, scroll wheel and keyboard, sound to the client if chosen in Choices (RDPSND, PCM at 22 kHz or so),
   a user name and password set in Choices (a login screen for clients
   that don't send them). One client at a time (RISC OS
   has one desktop and one user); heartbeats and network checks for TLS
   clients that take them, so a lost connection doesn't keep the next
-  one out. **For
-  your own network only.** Video and 3D in a hardware overlay (Reel,
+  one out. A log, Choices:RDPServer.Log (start-up, connections, anything slow),
+  with a detailed log for reporting problems as a Choices option.
+  **For your own network only.** Video and 3D in a hardware overlay (Reel,
   EGL/Mesa programs) show as a black window on the client.
 
 - `probe/`: **RDPSProbe 0.2**, a test program for a Raspberry Pi. It
@@ -43,7 +44,7 @@ link: tools/modlink.py).
 ```sh
 cd server
 tools/fetch.sh                                    # xrdp and Mbed TLS, patched
-make RCD_DIR=/path/to/riscos-crossdev             # build/RDPServer-0.2-rc2.zip
+make RCD_DIR=/path/to/riscos-crossdev             # build/RDPServer-0.2-rc3.zip
 make RCD_DIR=/path/to/riscos-crossdev host qemu module check
 tests/e2e.sh                                      # real clients, Linux build
 RCD_DIR=/path/to/riscos-crossdev QEMU=1 tests/e2e.sh   # ARM build, alignment traps on

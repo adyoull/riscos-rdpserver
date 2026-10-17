@@ -4,6 +4,7 @@
 
    Copyright (c) 2026 Andrew Youll. MIT licence (see LICENSE). */
 #include <stdio.h>
+#include <stdarg.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
@@ -20,6 +21,8 @@
 #include "keygen.h"
 #include "input.h"
 #include "auth.h"
+#include "platform.h"
+#include "sound.h"
 
 static int checks, fails;
 #define CHECK(c, what) do { checks++; if (!(c)) { fails++; \
@@ -30,7 +33,7 @@ static void test_pixels (void)
   /* One pixel each way: pure red, then 0x123456-ish. */
   unsigned char tbgr[8] = { 0xff, 0, 0, 0,  0x12, 0x34, 0x56, 0 };
   unsigned char trgb[8] = { 0, 0, 0xff, 0,  0x56, 0x34, 0x12, 0 };
-  uint32_t out32[2];
+  uint32_t out32[8];
   uint16_t out16[2];
   unsigned char out8[2];
   uint16_t s565 = 0x001f;           /* TBGR 5:6:5: red in the low bits */
@@ -115,6 +118,156 @@ static void test_pixels (void)
 }
 
 /* The restarting page (0.2-test24): background, panel and its text. */
+/* Sound (0.2-test27): sent at half the sound system's rate while that's
+   22 kHz or more, averaging pairs; the full rate as the fallback format.
+   libxrdp's channel and the sound system, pretend. */
+static unsigned char snd_out[4096];
+static int snd_out_len;
+static unsigned snd_sys_rate = 48000;
+struct xrdp_session;
+int libxrdp_get_channel_id (struct xrdp_session *s, const char *name)
+{ (void) s; return strcmp (name, "rdpsnd") == 0 ? 7 : -1; }
+int libxrdp_send_to_channel (struct xrdp_session *s, int chan, char *data, int len,
+                             int total, int flags)
+{
+  (void) s; (void) chan; (void) total;
+  if (flags & 1)
+    snd_out_len = 0;
+  if (snd_out_len + len <= (int) sizeof snd_out)
+    memcpy (snd_out + snd_out_len, data, (size_t) len);
+  snd_out_len += len;
+  return 0;
+}
+int plat_sound_rate (unsigned *r) { *r = snd_sys_rate; return 0; }
+int plat_sound_start (unsigned *r) { *r = snd_sys_rate; return 0; }
+int plat_sound_read (void *b, int n, int m) { (void) b; (void) n; (void) m; return 0; }
+void plat_sound_mute (int on) { (void) on; }
+void plat_sound_stats (plat_sound_info *i) { memset (i, 0, sizeof *i); }
+int plat_sound_ok (void) { return 1; }
+void plat_sound_stop (void) { }
+void plat_neon_copy (void *d, const void *s, unsigned n) { (void) d; (void) s; (void) n; }
+int plat_neon_enter (void) { return -1; }
+void plat_neon_leave (void) { }
+int plat_neon_convert (int rgb, int cbpp, void *d, const void *s, unsigned n)
+{ (void) rgb; (void) cbpp; (void) d; (void) s; (void) n; return -1; }
+static char snd_said[256];
+static void snd_say (const char *fmt, ...)
+{
+  va_list ap;
+  va_start (ap, fmt);
+  vsnprintf (snd_said, sizeof snd_said, fmt, ap);
+  va_end (ap);
+}
+static unsigned snd_get32 (const unsigned char *p)
+{ return p[0] | p[1] << 8 | (unsigned) p[2] << 16 | (unsigned) p[3] << 24; }
+
+/* The client's Audio Formats PDU, with the rates given (PCM, 16-bit
+   stereo each), as one channel piece. */
+static void snd_client_takes (rdps_sound *snd, const unsigned *rates, int n)
+{
+  unsigned char b[4 + 20 + 4 * 18];
+  int i, len = 4 + 20 + n * 18;
+  memset (b, 0, sizeof b);
+  b[0] = 0x07; b[2] = (unsigned char) (len - 4);
+  b[4] = 1;                                   /* TSSNDCAPS_ALIVE */
+  b[4 + 14] = (unsigned char) n;
+  b[4 + 17] = 6;
+  for (i = 0; i < n; i++)
+    {
+      unsigned char *f = b + 24 + i * 18;
+      f[0] = 1; f[2] = 2;
+      f[4] = (unsigned char) rates[i]; f[5] = (unsigned char) (rates[i] >> 8);
+      f[6] = (unsigned char) (rates[i] >> 16);
+      f[12] = 4; f[14] = 16;
+    }
+  sound_channel_data (snd, 7, 3, b, len, len);
+}
+
+static void test_sound_rate (void)
+{
+  static rdps_sound snd;
+  unsigned char pcm[16];
+  short in[8] = { 100, -100, 300, -300, 1000, 32767, 1002, 32767 };
+  unsigned both[2] = { 44100, 32000 }, full[1] = { 48000 }, half[1] = { 24000 };
+  int n;
+
+  CHECK (sound_step_for (48000) == 2 && sound_step_for (44100) == 2
+         && sound_step_for (96000) == 4 && sound_step_for (22050) == 1
+         && sound_step_for (32000) == 1 && sound_step_for (88200) == 4,
+         "sound: 48 and 44.1 kHz halved, 96 quartered, 22.05 and 32 as they are");
+  memcpy (pcm, in, sizeof pcm);
+  n = sound_decimate (pcm, 16, 2);
+  memcpy (in, pcm, 8);
+  CHECK (n == 8 && in[0] == 200 && in[1] == -200 && in[2] == 1001 && in[3] == 32767,
+         "sound: pairs of frames averaged, each channel on its own, no overflow");
+  CHECK (sound_decimate (pcm, 16, 1) == 16, "sound: step 1 leaves it as it is");
+
+  memset (&snd, 0, sizeof snd);
+  snd_sys_rate = 48000;
+  sound_start (&snd, (struct xrdp_session *) 1, 0, 0, 0, snd_say);
+  CHECK (snd.stage == 1 && snd_out_len == 4 + 20 + 2 * 18 && snd_out[4 + 14] == 2
+         && snd_get32 (snd_out + 24 + 4) == 24000 && snd_get32 (snd_out + 24 + 8) == 96000
+         && snd_get32 (snd_out + 42 + 4) == 48000,
+         "sound: 24 kHz offered first, then the full 48 kHz");
+  snd_client_takes (&snd, both, 2);
+  CHECK (snd.stage == 0 && strstr (snd_said, "won't play 24000 or 48000"),
+         "sound: a client taking neither: none, and the Log says so");
+  memset (&snd, 0, sizeof snd);
+  sound_start (&snd, (struct xrdp_session *) 1, 0, 0, 0, snd_say);
+  snd_client_takes (&snd, half, 1);
+  CHECK (snd.stage == 2 && snd.client_format == 0 && snd.out_rate == 24000 && snd.step == 2
+         && strstr (snd_said, "24000 Hz 16-bit stereo (from 48000 Hz"),
+         "sound: a client taking 24 kHz gets it (and the Log says from what)");
+  memset (&snd, 0, sizeof snd);
+  sound_start (&snd, (struct xrdp_session *) 1, 0, 0, 0, snd_say);
+  snd_client_takes (&snd, full, 1);
+  CHECK (snd.stage == 2 && snd.out_rate == 48000 && snd.step == 1,
+         "sound: a client taking only the full rate gets that");
+  memset (&snd, 0, sizeof snd);
+  sound_start (&snd, (struct xrdp_session *) 1, 0, 0, 1, snd_say);
+  CHECK (snd_out_len == 4 + 20 + 18 && snd_get32 (snd_out + 24 + 4) == 48000,
+         "sound: RDPServer$SoundRate 0: only the full rate offered");
+  memset (&snd, 0, sizeof snd);
+  snd_sys_rate = 22050;
+  sound_start (&snd, (struct xrdp_session *) 1, 0, 0, 0, snd_say);
+  CHECK (snd_out_len == 4 + 20 + 18 && snd_get32 (snd_out + 24 + 4) == 22050,
+         "sound: a computer at 22.05 kHz: that, once");
+  snd_sys_rate = 48000;
+}
+
+/* pix_convert_fast (0.2-test28, measured only for now): the same pixels
+   as pix_convert, 32 bpp TBGR and TRGB to 32, 24 and 16 bpp clients;
+   other formats refused, nothing written. */
+static void test_convert_fast (void)
+{
+  static unsigned char src[13 * 7 * 4 + 4 * 7];
+  static unsigned char a[13 * 7 * 4], b[13 * 7 * 4];
+  static const int depths[3] = { 32, 24, 16 };
+  int i, d, bad = 0;
+  uint32_t seed = 28;
+  for (i = 0; i < (int) sizeof src; i++)
+    {
+      seed = seed * 1103515245u + 12345u;
+      src[i] = (unsigned char) (seed >> 16);
+    }
+  for (i = 0; i < 2; i++)
+    for (d = 0; d < 3; d++)
+      {
+        pix_format f = i ? PIX_32_TRGB : PIX_32_TBGR;
+        memset (a, 1, sizeof a);
+        memset (b, 2, sizeof b);
+        pix_convert (f, src, 13 * 4 + 4, 13, 7, depths[d], a);
+        if (pix_convert_fast (f, src, 13 * 4 + 4, 13, 7, depths[d], b) != 0
+            || memcmp (a, b, (size_t) 13 * 7 * (size_t) pix_client_bytes (depths[d])) != 0)
+          bad++;
+      }
+  CHECK (bad == 0, "a simpler loop: the same pixels as pix_convert (TBGR, TRGB to 32, 24, 16 bpp)");
+  memset (b, 7, sizeof b);
+  CHECK (pix_convert_fast (PIX_16_565_TBGR, src, 26, 13, 7, 32, b) == -1
+         && pix_convert_fast (PIX_32_TBGR, src, 56, 13, 7, 8, b) == -1 && b[0] == 7,
+         "and refuses 16 bpp screens and 8 bpp clients, writing nothing");
+}
+
 static void test_notice (void)
 {
   login_ui l;
@@ -1346,6 +1499,8 @@ int main (void)
   test_kbdlayout ();
   test_login ();
   test_utf8 ();
+  test_sound_rate ();
+  test_convert_fast ();
   test_keymap ();
   test_crypto ();
   test_keygen ();

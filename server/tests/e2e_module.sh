@@ -38,6 +38,14 @@ EMU_ALIGN=0 python3 tests/modserver.py build/module/RDPServer,ffa "$OUT/keys" $P
 trap 'kill $SPID $XPID 2>/dev/null' EXIT
 for i in $(seq 1 30); do grep -q "listening on port" "$OUT/server.log" 2>/dev/null && break; sleep 1; done
 grep -q "listening on port $PORT" "$OUT/server.log" && ok "the module is listening" || { bad "the module didn't start"; cat "$OUT/server.log"; exit 1; }
+# NEON (0.2-test30): the screen read by it (forced: RDPServer$ScreenCopy 3,
+# modserver.py) and the tiles converted by it, so every picture below
+# went through both
+for i in $(seq 1 20); do grep -q "converting by" "$OUT/server.log" && break; sleep 0.5; done
+grep -q "screen read by NEON (RDPServer\$ScreenCopy)" "$OUT/server.log" \
+  && grep -q "converting by NEON (32 bpp screens" "$OUT/server.log" \
+  && ok "NEON reads the screen and converts the tiles" \
+  || bad "NEON not used: $(grep 'screen read by\|converting by\|NEON' "$OUT/server.log" | tr '\n' ' ')"
 ctl () { echo "$1" >>"$OUT/ctl"; }
 ups () { grep -c "client up" "$OUT/server.log"; }
 gones () { grep -c "client gone" "$OUT/server.log"; }
@@ -190,8 +198,8 @@ s0=$(sums)
 xfreerdp3 /v:localhost:$PORT /u:test /p:x /sec:rdp /cert:ignore /bpp:32 /sound:sys:fake >"$OUT/freerdp-sound.log" 2>&1 & CPID=$!
 for i in $(seq 1 30); do [ "$(ups)" -gt "$u" ] && break; sleep 1; done
 sleep 4
-n0=$(grep -c "sound: to the client, 48000 Hz 16-bit stereo" "$OUT/server.log")
-[ "$n0" -ge 1 ] && ok "sound: the client takes 48 kHz 16-bit stereo" || bad "sound: no format agreed: $(grep 'sound' "$OUT/server.log" | tail -2)"
+n0=$(grep -c "sound: to the client, 24000 Hz 16-bit stereo (from 48000 Hz" "$OUT/server.log")
+[ "$n0" -ge 1 ] && ok "sound: the client takes 24 kHz 16-bit stereo (half the computer's 48)" || bad "sound: no format agreed: $(grep 'sound' "$OUT/server.log" | tail -2)"
 grep -q "emu: sound handlers: 1" "$OUT/server.log" && ok "a SharedSound process handler is installed" || bad "no sound handler"
 ctl "mute 1"
 sleep 3
@@ -227,7 +235,7 @@ grep -q "sound after 5 s: output handler before ours &[0-9A-F]* (SharedSound's);
 u=$(ups)
 xfreerdp3 /v:localhost:$PORT /u:test /p:x /sec:rdp /cert:ignore /bpp:32 /sound:sys:fake >"$OUT/freerdp-sound2.log" 2>&1 & CPID=$!
 for i in $(seq 1 30); do [ "$(ups)" -gt "$u" ] && break; sleep 1; done
-for i in $(seq 1 20); do [ "$(grep -c 'sound: to the client, 48000' "$OUT/server.log")" -gt "$n0" ] && break; sleep 0.5; done
+for i in $(seq 1 20); do [ "$(grep -c 'sound: to the client, 24000' "$OUT/server.log")" -gt "$n0" ] && break; sleep 0.5; done
 h1=$(grep -c 'emu: sound handlers: 1' "$OUT/server.log")
 ctl "sound 0"
 for i in $(seq 1 20); do grep -q "sound: stopped (Choices)" "$OUT/server.log" && break; sleep 0.5; done
@@ -239,14 +247,70 @@ for i in $(seq 1 20); do [ "$(grep -c 'emu: sound handlers: 0' "$OUT/server.log"
 kill $CPID 2>/dev/null; wait $CPID 2>/dev/null
 sleep 2
 u=$(ups)
-n1=$(grep -c "sound: to the client, 48000" "$OUT/server.log")
+n1=$(grep -c "sound: to the client, 24000" "$OUT/server.log")
 xfreerdp3 /v:localhost:$PORT /u:test /p:x /sec:rdp /cert:ignore /bpp:32 /sound:sys:fake >"$OUT/freerdp-sound3.log" 2>&1 & CPID=$!
 for i in $(seq 1 30); do [ "$(ups)" -gt "$u" ] && break; sleep 1; done
 sleep 3
-grep -q "sound: not sent (Choices" "$OUT/server.log" && [ "$(grep -c 'sound: to the client, 48000' "$OUT/server.log")" -eq "$n1" ] \
+grep -q "sound: not sent (Choices" "$OUT/server.log" && [ "$(grep -c 'sound: to the client, 24000' "$OUT/server.log")" -eq "$n1" ] \
   && ok "with sound off, the next client gets none (and the log says why)" || bad "sound off, next client: $(grep 'sound' "$OUT/server.log" | tail -2 | tr '\n' ' ')"
 kill $CPID 2>/dev/null; wait $CPID 2>/dev/null
 ctl "sound 1"
+sleep 2
+
+# --- 5f: running out of memory (0.2-test31; a tester's Windows 11 client
+# made the module abort in libxrdp_send_pointer: a stream claim that failed
+# went unchecked). With RISC OS giving no more memory and only so much
+# free in the heap, a client connecting at each of these must never
+# crash the module: the session ends with "out of memory", and the module
+# goes on listening. Then, memory back, a client comes up as ever.
+lost0=$(grep -c "the server was lost" "$OUT/server.log")
+for keep in 64 512 1100 1600 2200 3000 4500 7000; do
+  ctl "memfill $keep"
+  sleep 1
+  timeout 12 xfreerdp3 /v:localhost:$PORT /u:test /p:x /sec:rdp /cert:ignore /bpp:32 >"$OUT/freerdp-mem$keep.log" 2>&1
+  ctl "memunfill"
+  sleep 1
+done
+{ ! kill -0 $SPID 2>/dev/null || grep -qi "emu: fatal" "$OUT/server.log" \
+    || [ "$(grep -c "the server was lost" "$OUT/server.log")" -gt "$lost0" ]; } \
+  && bad "running out of memory: the module died or was lost ($(grep -i 'emu: fatal\|the server was lost' "$OUT/server.log" | tail -2 | tr '\n' ' '))" \
+  || ok "running out of memory at 8 points: no abort, the server never lost"
+grep -q "out of memory" "$OUT/server.log" \
+  && ok "and the Log says so ($(grep -c 'out of memory' "$OUT/server.log") times)" \
+  || bad "no 'out of memory' in the Log"
+u=$(ups)
+xfreerdp3 /v:localhost:$PORT /u:test /p:x /sec:rdp /cert:ignore /bpp:32 >"$OUT/freerdp-mem-after.log" 2>&1 & CPID=$!
+for i in $(seq 1 30); do [ "$(ups)" -gt "$u" ] && break; sleep 1; done
+[ "$(ups)" -gt "$u" ] && grep -q "memory: [0-9]* MB of RDPServer's most" "$OUT/server.log" \
+  && ok "memory back: a client comes up, and the Log says the memory in use" \
+  || bad "no client up after the memory came back"
+grep -q "The client takes fast-path PDUs of up to [0-9]* bytes: 128 KB used" "$OUT/server.log" \
+  && ok "FreeRDP's fast-path size capped at 128 KB (libxrdp patch 0009)" \
+  || bad "no fast-path cap in the Log"
+kill $CPID 2>/dev/null; sleep 1; kill -9 $CPID 2>/dev/null; wait $CPID 2>/dev/null
+sleep 2
+
+# --- 5e: Choices' detailed log (SET_VERBOSE, 0.2-test26): off stops the
+# 5-second figures at once, on brings them back, the client connected -----
+u=$(ups)
+xfreerdp3 /v:localhost:$PORT /u:test /p:x /sec:rdp /cert:ignore /bpp:32 >"$OUT/freerdp-verbose.log" 2>&1 & CPID=$!
+for i in $(seq 1 30); do [ "$(ups)" -gt "$u" ] && break; sleep 1; done
+sleep 6
+f0=$(grep -c 'last 5 s:' "$OUT/server.log")
+ctl "verbose 0"
+for i in $(seq 1 10); do grep -q "detailed log off" "$OUT/server.log" && break; sleep 0.5; done
+f1=$(grep -c 'last 5 s:' "$OUT/server.log")
+sleep 11
+f2=$(grep -c 'last 5 s:' "$OUT/server.log")
+grep -q "emu: verbose: 0" "$OUT/server.log" && grep -q "detailed log off" "$OUT/server.log" \
+  && [ "$f0" -gt 0 ] && [ "$f2" -eq "$f1" ] \
+  && ok "Choices' detailed log off: no more 5-second figures ($f0 before)" \
+  || bad "detailed log off: before $f0, at off $f1, 11 s later $f2"
+ctl "verbose 1"
+for i in $(seq 1 16); do [ "$(grep -c 'last 5 s:' "$OUT/server.log")" -gt "$f2" ] && break; sleep 0.5; done
+grep -q "detailed log on" "$OUT/server.log" && [ "$(grep -c 'last 5 s:' "$OUT/server.log")" -gt "$f2" ] \
+  && ok "and on again: the figures come back" || bad "detailed log on: $(grep -c 'last 5 s:' "$OUT/server.log") figures"
+kill $CPID 2>/dev/null; sleep 1; kill -9 $CPID 2>/dev/null; wait $CPID 2>/dev/null
 sleep 2
 
 # --- 5d: only TLS (Choices) -------------------------------------------------

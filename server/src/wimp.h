@@ -62,8 +62,9 @@ int wimp_read_port (const char *file, int def);
 int wimp_read_mute (const char *file, int def);
 int wimp_read_tls (const char *file, int def);
 int wimp_read_sound (const char *file, int def);
+int wimp_read_log (const char *file, int def);
 int wimp_write_settings (const char *file, int port, int mute_local, int require_tls,
-                         int send_sound);
+                         int send_sound, int detailed_log);
 
 /* All of it: wimp_init, the poll loop, wimp_close. Returns the exit
    status. */

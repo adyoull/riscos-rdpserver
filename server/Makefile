@@ -12,7 +12,7 @@ include $(RCD_DIR)/riscos.mk
 .DEFAULT_GOAL := all
 
 VERSION := 0.2
-TESTSUFFIX := -rc2
+TESTSUFFIX := -rc3
 B := build
 X := $(B)/xrdp
 XRDP_H = $(wildcard $(X)/common/*.h $(X)/libxrdp/*.h)
@@ -101,7 +101,7 @@ MOD_OUR := server.c xrdp_peek.c srvthread.c input.c auth.c capture.c pointer.c l
            ssl_calls.c plat_riscos.c
 MOD_OBJ := $(patsubst %.c,$(MO)/%.o,$(notdir $(XRDP_SRC) $(MOD_OUR))) \
            $(MO)/module.o $(MO)/libc.o $(MO)/fmt.o $(MO)/header.o $(MO)/coro_arm.o $(MO)/clickup.o $(MO)/scrcopy.o \
-           $(MO)/sndcap.o
+           $(MO)/sndcap.o $(MO)/vfpctx.o $(MO)/neon.o
 MOD_MBED := $(patsubst %.c,$(MO)/mbed/%.o,$(notdir $(MBED_SRC)))
 LIBGCC = $(shell $(RO_CC) -print-libgcc-file-name)
 
@@ -180,7 +180,7 @@ $(QO)/rdpserver: $(QO_OBJ) $(QO)/libmbedcrypto.a
 
 # --- tests -------------------------------------------------------------------
 T := $(B)/tests
-UNIT_SRC := tests/test_units.c src/input.c src/auth.c src/pixels.c src/capture.c src/pointer.c src/login.c src/font8x8.c src/kbdlayout.c src/keymap.c src/keygen.c \
+UNIT_SRC := tests/test_units.c src/sound.c src/input.c src/auth.c src/pixels.c src/capture.c src/pointer.c src/login.c src/font8x8.c src/kbdlayout.c src/keymap.c src/keygen.c \
             src/ssl_calls.c src/os_calls.c src/coro_ucontext.c tests/thread_stubs.c \
             $(X)/common/log.c $(X)/common/string_calls.c $(X)/common/list.c $(X)/common/file.c
 
@@ -226,9 +226,10 @@ test-module: $(MO)/RDPServer,ffa $(T)/keys/rsakeys.ini
 	python3 tests/test_module.py $(MO)/RDPServer,ffa $(T)/keys
 
 # The click-release routines in the Unicorn emulator (pip install unicorn).
-test-emu: $(RO)/clickup.o $(MO)/scrcopy.o
+test-emu: $(RO)/clickup.o $(MO)/scrcopy.o $(MO)/neon.o
 	python3 tests/test_clickup.py $(RO)/clickup.o
 	python3 tests/test_scrcopy.py $(MO)/scrcopy.o
+	python3 tests/test_neon.py $(MO)/neon.o
 
 clean:
 	rm -rf $(RO) $(HO) $(QO) $(MO) $(B)/app $(B)/*.zip $(B)/tests

@@ -99,6 +99,11 @@ typedef struct
   int mute_local;                  /* from the options; Choices can change it */
   int require_tls;                 /* likewise */
   int send_sound;                  /* likewise: off unless chosen (0.2-test22) */
+  int mem_refusing;                /* no connections taken: memory short (0.2-test31) */
+  int sound_full;                  /* RDPServer$SoundRate 0: sound at the
+                                      sound system's rate (0.2-test27) */
+  int verbose;                     /* the detailed log: from the options, then
+                                      Choices (0.2-test26) */
   int sound_stop_due;              /* Choices turned it off: stop it in step */
   int sound_closed;                /* stopped by Choices: not again this session */
   int fills_var, bulk_var;         /* RDPServer$Fills, $BulkCompress (-1: unset) */
@@ -176,6 +181,8 @@ static void server_arc_connection_ended (void);
 static server srv;
 static void phase (server *s, const char *name);
 static void updates_say (server *s);
+static void memory_say (const char *what);
+#define MEMORY_RESERVE (1024 * 1024)   /* kept back for running out (0.2-test31) */
 
 /* Messages: to stdout (the task window, Linux), or to the front end's
    hook (the Wimp version keeps the last few for its Status window and
@@ -242,7 +249,7 @@ unstick_modifiers (server *s)
   int m = plat_modifiers ();
   size_t i;
 
-  if (s->opt->verbose)
+  if (s->verbose)
     say ("before the click: RISC OS has%s%s%s held, keyboard status &%02X",
          (m & PLAT_SHIFT) ? " Shift" : "", (m & PLAT_CTRL) ? " Ctrl" : "",
          (m & PLAT_ALT) ? " Alt" : (m & 7) ? "" : " nothing", (unsigned) (m >> 8) & 0xff);
@@ -263,7 +270,7 @@ sink_key (void *ctx, int ll, int down)
   server *s = ctx;
   if (down && ll >= 0x70 && ll <= 0x72)
     unstick_modifiers (s);
-  if (s->opt->verbose)
+  if (s->verbose)
     {
       if (loggable (ll))
         say ("KeyV %s &%02X", down ? "down" : "up", ll);
@@ -280,7 +287,7 @@ sink_click (void *ctx, int ll)
   unstick_modifiers (s);
   if (plat_click (ll, (unsigned) s->input.click_cs) != 0)
     return -1;
-  if (s->opt->verbose)
+  if (s->verbose)
     say ("click &%02X: KeyV down, up in %d cs by ticker", ll, s->input.click_cs);
   return 0;
 }
@@ -303,7 +310,7 @@ static void
 sink_wheel (void *ctx, int dz, int dw)
 {
   server *s = ctx;
-  if (s->opt->verbose)
+  if (s->verbose)
     say ("wheel %d, %d", dz, dw);
   plat_wheel (dz, dw);
 }
@@ -346,7 +353,7 @@ mouse (server *s, int flags, int x, int y)
 {
   int down = (flags & PTRFLAGS_DOWN) != 0;
 
-  if (s->opt->verbose && (flags & ~PTRFLAGS_MOVE))
+  if (s->verbose && (flags & ~PTRFLAGS_MOVE))
     say ("mouse flags &%04X at %d,%d", (unsigned) flags, x, y);
   if (flags & PTRFLAGS_WHEEL)
     {
@@ -391,10 +398,10 @@ static void
 scancode (server *s, int flags, int code)
 {
   int ll = keymap_lookup (code, (flags & KBD_FLAG_EXT) != 0);
-  if (s->opt->verbose && loggable (ll))
+  if (s->verbose && loggable (ll))
     say ("key scancode &%02X flags &%04X -> &%02X", (unsigned) code,
          (unsigned) flags, (unsigned) ll);
-  else if (s->opt->verbose && ll < 0)
+  else if (s->verbose && ll < 0)
     say ("key scancode &%02X flags &%04X: no RISC OS key", (unsigned) code,
          (unsigned) flags);
   if (ll >= 0)
@@ -489,7 +496,7 @@ callback (intptr_t id, int msg, intptr_t param1, intptr_t param2,
       /* Sent when the client window gets the focus back: any key-ups
          sent while it hadn't got it are lost, so let go of everything
          (the client sends key-downs for keys still held). */
-      if (s->opt->verbose)
+      if (s->verbose)
         say ("synchronise (lock keys &%X)", (unsigned) param1);
       release_all (s);
       break;
@@ -685,7 +692,7 @@ palette_refresh (server *s, int redirected)
   if (s->cap.frame)
     {
       cap_mark_all (&s->cap);
-      if (s->opt->verbose)
+      if (s->verbose)
         say ("the palette changed: the screen is sent again");
     }
   s->pal_n = n;
@@ -737,12 +744,13 @@ session_go (server *s, const char *user)
   arc_send (s, ci);
   phase (s, "starting the sound");
   if (s->send_sound && !s->sound_closed)
-    sound_start (&s->snd, s->session, s->mute_local, s->opt->verbose, say);
+    sound_start (&s->snd, s->session, s->mute_local, s->verbose, s->sound_full, say);
   else if (libxrdp_get_channel_id (s->session, "rdpsnd") >= 0)
     say ("sound: not sent (Choices: \"Send this computer's sound to the client\" is off)");
   s->last_activity = plat_time_cs ();
   say ("client up: %d x %d, %d bpp, user \"%s\"", s->scr.width, s->scr.height,
        s->client_bpp, user);
+  memory_say (NULL);
   s->up_since = plat_time_cs ();
   s->pointer_due = 1;
   plat_set_clients (1);
@@ -891,7 +899,7 @@ session_up (server *s)
          rdps_tls_handshake_cs);
   else
     say ("security: Standard RDP Security (RC4): the client didn't ask for TLS");
-  if (s->opt->verbose)
+  if (s->verbose)
     {
       if (!(s->trans && s->trans->tls))
         say ("key exchange: the RSA step took %u cs", rdps_modexp_cs);
@@ -906,6 +914,12 @@ session_up (server *s)
   s->tilebuf = malloc ((size_t) CAP_TILE * CAP_TILE * 4);
   if (!s->tilebuf)
     return -1;
+  /* a block kept back for running out (0.2-test31) */
+  if (plat_memory_reserve (MEMORY_RESERVE) != 0)
+    {
+      memory_say ("out of memory before the session started");
+      return -1;
+    }
   if (s->client_bpp == 8)
     {
       int pal[256];
@@ -938,6 +952,7 @@ session_up (server *s)
         return -1;
       cap_scan (&s->cap, (const unsigned char *) s->login.px, (size_t) s->login.w * 4, s->login.h);
       cap_mark_all (&s->cap);
+      memory_say (NULL);
       s->pointer_due = 1;
       s->last_activity = now;
       copy_text (s->client_user, sizeof s->client_user, "");
@@ -950,6 +965,27 @@ session_up (server *s)
   cap_mark_all (&s->cap);
   session_go (s, ci->username);
   return 0;
+}
+
+/* Memory (0.2-test31): how much the module's heap has, of its most, and
+   whether RISC OS refused it more (no free memory) */
+static void
+memory_say (const char *what)
+{
+  unsigned used, max;
+  int refused;
+  plat_memory_info (&used, &max, &refused);
+  if (!max)
+    return;                     /* (Linux) */
+  if (!what)
+    say ("memory: %u MB of RDPServer's most %u in use", (used + 512) / 1024, max / 1024);
+  else if (refused)
+    say ("%s: RDPServer's memory is %u MB (most %u), and RISC OS had no more to "
+         "give it: free some memory, or use a screen mode with fewer pixels",
+         what, (used + 512) / 1024, max / 1024);
+  else
+    say ("%s: RDPServer's memory is %u MB, its most (a screen mode with fewer "
+         "pixels needs less)", what, (used + 512) / 1024);
 }
 
 /* Solid areas go as OpaqueRect orders ([MS-RDPEGDI] 2.2.2.2.1.1.2.5), a
@@ -1087,9 +1123,9 @@ send_dirty (server *s)
           if (!s->session || !s->trans || rdps_thread_ending ())
             return;
         }
-      pix_convert (s->in_login ? PIX_32_TBGR : s->fmt, cap_pixel (&s->cap, x, y),
-                   s->cap.row_bytes, w, h,
-                   s->client_bpp, s->tilebuf);
+      pix_convert_best (s->in_login ? PIX_32_TBGR : s->fmt, cap_pixel (&s->cap, x, y),
+                        s->cap.row_bytes, w, h,
+                        s->client_bpp, s->tilebuf);
       /* Tiles don't overlap, so the fills can wait in one orders PDU
          while bitmaps of other tiles go. */
       if (s->fills_ok && pix_solid (s->tilebuf, w, h, s->client_bpp, &color))
@@ -1302,6 +1338,18 @@ conn_in (struct trans *listener, struct trans *t)
       trans_delete (t);
       return 0;
     }
+  /* Without the block kept back for running out (it was given up and
+     can't be had again: memory is short), a connection would meet
+     libxrdp's unchecked claims with nothing to fall back on (0.2-test31) */
+  if (s->trans == NULL && plat_memory_reserve (MEMORY_RESERVE) != 0)
+    {
+      char desc[64];
+      g_sck_get_peer_description ((int) t->sck, desc, sizeof desc);
+      memory_say ("refused a connection");
+      say ("refused %s: out of memory", desc);
+      trans_delete (t);
+      return 0;
+    }
   if (s->trans == NULL && s->waiting != NULL)
     /* the client it waited for has gone: it goes first */
     waiting_step (s, plat_time_cs ());
@@ -1336,7 +1384,7 @@ encode_speed_say (void)
 {
   rdps_screen scr;
   static const int depths[2] = { 32, 16 };
-  int i;
+  int i, fast_ok[2] = { 0, 0 }, neon_ok[2] = { 0, 0 };
   pix_format f;
   if (plat_screen (&scr) != NULL || scr.redirected)
     return;
@@ -1354,13 +1402,36 @@ encode_speed_say (void)
            "%u ms, compressing %u ms (%u KB), MPPC %u ms (%u KB)", depths[i],
            rdps_enc_ms (r.screen_tiles, r.convert_tps), rdps_enc_ms (r.screen_tiles, r.compress_tps),
            r.rle_kb, rdps_enc_ms (r.screen_tiles, r.mppc_tps), r.mppc_kb);
+      /* the other ways of converting (0.2-test28): used since test30, each
+         only if it made exactly the same pixels at both depths */
+      if (r.fast_tps)
+        {
+          fast_ok[i] = r.fast_same;
+          neon_ok[i] = r.neon_tps && r.neon_same;
+          if (r.neon_tps)
+            say ("converting at %d bpp, other ways: a simpler loop %u ms%s, NEON %u ms%s",
+                 depths[i], rdps_enc_ms (r.screen_tiles, r.fast_tps),
+                 r.fast_same ? "" : " (DIFFERENT pixels)",
+                 rdps_enc_ms (r.screen_tiles, r.neon_tps),
+                 r.neon_same ? " (the same pixels)" : " (DIFFERENT pixels)");
+          else
+            say ("converting at %d bpp, other ways: a simpler loop %u ms%s", depths[i],
+                 rdps_enc_ms (r.screen_tiles, r.fast_tps),
+                 r.fast_same ? " (the same pixels)" : " (DIFFERENT pixels)");
+        }
     }
+  pix_use_fast = fast_ok[0] && fast_ok[1];
+  pix_use_neon = neon_ok[0] && neon_ok[1] && pix_use_fast;   /* (the loop does
+                                                                 NEON's leftovers) */
+  if (pix_use_neon || pix_use_fast)
+    say ("converting by %s (32 bpp screens; others the general way)",
+         pix_use_neon ? "NEON" : "the simpler loop");
 }
 
 /* What the step is doing now, for finding what holds the machine up:
-   with -v, a phase that held it for 10 cs or more (not counting the
-   waits in it, srvthread.h) is logged, at most 5 times in 5 seconds.
-   (0.2-test22) */
+   a phase that held it for 10 cs or more (not counting the waits in it,
+   srvthread.h) is logged, at most 5 times in 5 seconds with the detailed
+   log, 5 times a server run without (0.2-test22, test26) */
 #define SLOW_CS 10
 static void
 phase (server *s, const char *name)
@@ -1369,7 +1440,7 @@ phase (server *s, const char *name)
   if (s->ph_name)
     {
       unsigned held = (t - s->ph_t) - (y - s->ph_y);
-      if (held >= SLOW_CS && (int) held > 0 && s->opt && s->opt->verbose && s->slow_said < 5)
+      if (held >= SLOW_CS && (int) held > 0 && s->slow_said < 5)
         {
           s->slow_said++;
           say ("slow: %u cs %s", held, s->ph_name);
@@ -1416,6 +1487,49 @@ screen_copy_speed (const rdps_screen *scr, unsigned char *row, size_t row_bytes,
   return t == t0 ? 0 : (unsigned) (bytes / 1024 * 100 / (t - t0));
 }
 
+/* NEON: whether the module could make its own VFP context (not at all
+   with RDPServer$NEON 0), and what switching to it and back costs with a
+   little NEON work in between (8 pixels converted). (0.2-test28; used
+   since 0.2-test30) */
+static void
+neon_say (void)
+{
+  static uint32_t in[8], out[8];
+  unsigned t0, t, n = 0;
+  pix_use_neon = pix_use_fast = 0;     /* until shown to make the same pixels */
+  if (plat_var_int ("RDPServer$NEON", -1) == 0)
+    {
+      plat_neon_stop ();        /* one made by an earlier server run, too:
+                                   every plat_neon_enter fails from now */
+      say ("NEON: not used (RDPServer$NEON 0)");
+      return;
+    }
+  if (!plat_neon_start ())
+    {
+      say ("NEON: not here (no VFPSupport, or no NEON)");
+      return;
+    }
+  t0 = plat_time_cs ();
+  do
+    {
+      int i;
+      for (i = 0; i < 100; i++)
+        if (plat_neon_enter () == 0)
+          {
+            plat_neon_convert (0, 32, out, in, 8);
+            plat_neon_leave ();
+            n++;
+          }
+      t = plat_time_cs ();
+    }
+  while ((int) (t - t0) < 5 && n < 1000000);
+  if (n)
+    say ("NEON: its own VFP context, a switch there and back %u.%u us",
+         (t - t0) * 10000 / n, (t - t0) * 100000 / n % 10);
+  else
+    say ("NEON: the module's VFP context couldn't be switched to");
+}
+
 /* At start-up: time copying out of the screen by single words (the
    module's memcpy until 0.2-test21) and by LDM of eight words, say so,
    and use the quicker. *Set RDPServer$ScreenCopy 1 (words) or 2 (LDM 8)
@@ -1437,14 +1551,31 @@ screen_copy_choose (server *s)
     {
       unsigned w = screen_copy_speed (&scr, row, row_bytes, CAP_COPY_WORDS, 10);
       unsigned l = screen_copy_speed (&scr, row, row_bytes, CAP_COPY_LDM8, 10);
+      unsigned n = 0;
       cap_copy_way = l >= w ? CAP_COPY_LDM8 : CAP_COPY_WORDS;
+      /* NEON (0.2-test28; used since test30): timed as cap_scan uses it,
+         the context switched to around the run */
+      if (plat_neon_enter () == 0)
+        {
+          n = screen_copy_speed (&scr, row, row_bytes, CAP_COPY_NEON, 10);
+          plat_neon_leave ();
+        }
+      if (n > (l >= w ? l : w))
+        cap_copy_way = CAP_COPY_NEON;
       free (row);
-      say ("screen read: single words %u MB/s, LDM 8 %u MB/s", w / 1024, l / 1024);
+      if (n)
+        say ("screen read: single words %u MB/s, LDM 8 %u MB/s, NEON %u MB/s",
+             w / 1024, l / 1024, n / 1024);
+      else
+        say ("screen read: single words %u MB/s, LDM 8 %u MB/s", w / 1024, l / 1024);
     }
-  if (forced == CAP_COPY_WORDS || forced == CAP_COPY_LDM8)
+  if (forced == CAP_COPY_WORDS || forced == CAP_COPY_LDM8
+      || (forced == CAP_COPY_NEON && plat_var_int ("RDPServer$NEON", -1) != 0
+          && plat_neon_start ()))
     cap_copy_way = forced;
-  say ("screen read by %s%s", cap_copy_way == CAP_COPY_LDM8 ? "LDM 8" : "single words",
-       forced == CAP_COPY_WORDS || forced == CAP_COPY_LDM8 ? " (RDPServer$ScreenCopy)" : "");
+  say ("screen read by %s%s", cap_copy_way == CAP_COPY_NEON ? "NEON"
+       : cap_copy_way == CAP_COPY_LDM8 ? "LDM 8" : "single words",
+       forced == cap_copy_way ? " (RDPServer$ScreenCopy)" : "");
 }
 
 
@@ -1496,8 +1627,14 @@ server_start (const server_options *o)
   s->bulk_var = plat_var_int ("RDPServer$BulkCompress", -1);
   if (s->bulk_var == 0)
     say ("RDPServer$BulkCompress: updates not bulk compressed (MPPC)");
+  /* RDPServer$SoundRate 0: sound at the rate the computer plays at, not
+     halved to 22 kHz or so (0.2-test27) */
+  s->sound_full = plat_var_int ("RDPServer$SoundRate", -1) == 0;
+  if (s->sound_full)
+    say ("RDPServer$SoundRate 0: sound at the full rate");
   s->snd.chan = -1;
   s->opt = o;
+  s->verbose = o->verbose != 0;
   s->mute_local = o->mute_local;
   s->require_tls = o->require_tls;
   s->send_sound = o->send_sound;
@@ -1547,17 +1684,19 @@ server_start (const server_options *o)
       }
   }
   {
-    /* libxrdp's messages: errors only, or more with -v; to the console,
-       or to a file (the Wimp version: a Wimp task mustn't print). */
-    struct log_config *lc = log_config_init_for_console (o->verbose ? LOG_LEVEL_INFO
-                                                         : LOG_LEVEL_ERROR, NULL);
+    /* libxrdp's messages, at INFO always: a few dozen lines as each
+       client connects (its security, its capabilities), little after
+       (0.2-test26: with the detailed log off by default, these stay);
+       to the console, or to a file (the Wimp version: a Wimp task
+       mustn't print). */
+    struct log_config *lc = log_config_init_for_console (LOG_LEVEL_INFO, NULL);
     if (lc)
       {
         if (o->log_file)
           {
             lc->enable_console = 0;
             lc->log_file = strdup (o->log_file);
-            lc->log_level = o->verbose ? LOG_LEVEL_INFO : LOG_LEVEL_ERROR;
+            lc->log_level = LOG_LEVEL_INFO;
           }
         log_start_from_param (lc);
         log_config_free (lc);
@@ -1603,6 +1742,7 @@ server_start (const server_options *o)
     else
       say ("TLS off (no certificate): clients get Standard RDP Security only");
   }
+  neon_say ();
   screen_copy_choose (s);
   encode_speed_say ();
   return 0;
@@ -1787,7 +1927,7 @@ keepalive_step (server *s, unsigned now)
   ci = s->session->client_info;
   if (ci->rtt_replies != s->rtt_seen)
     {
-      if (s->rtt_seen == 0 || s->opt->verbose)
+      if (s->rtt_seen == 0 || s->verbose)
         say ("network check answered (round trip %u cs)", now - s->rtt_sent_at);
       s->last_rtt_cs = now - s->rtt_sent_at;
       s->rtt_seen = ci->rtt_replies;
@@ -1861,6 +2001,12 @@ waiting_step (server *s, unsigned now)
   if (s->trans == NULL)
     {
       s->waiting = NULL;
+      if (plat_memory_reserve (MEMORY_RESERVE) != 0)
+        {
+          memory_say ("refused the waiting connection");
+          trans_delete (t);
+          return;
+        }
       say ("the waiting connection goes ahead");
       session_start (s, t);
       return;
@@ -1881,16 +2027,38 @@ step (unsigned max_wait_cs)
   server *s = &srv;
   fd_set rd, wr;
   struct timeval tv;
-  int backlog, maxfd, tls_more;
+  int backlog, maxfd, tls_more, mem_ok;
   unsigned now = plat_time_cs (), wait_cs;
 
   if (!s->running)
     return 25;
+  /* A claim failed (0.2-test31): the block kept back was given up so
+     that libxrdp's small claims still succeed, but the session can't
+     go on. */
+  if (plat_memory_short ())
+    {
+      memory_say ("out of memory");
+      if (s->trans)
+        {
+          session_end (s, "out of memory (see the line before)");
+          return 0;
+        }
+    }
+  /* the block kept back, again if it was given up (the handshake needs
+     it too, before a session starts). Without it no connection is taken:
+     accepting one claims memory in libxrdp's trans layer already. */
+  mem_ok = plat_memory_reserve (MEMORY_RESERVE) == 0;
+  if (!mem_ok && !s->mem_refusing)
+    memory_say ("not taking connections until there's memory again");
+  else if (mem_ok && s->mem_refusing)
+    say ("memory again: taking connections");
+  s->mem_refusing = !mem_ok;
   phase (s, "reading from the client");
   maxfd = (int) s->listener->sck;
   FD_ZERO (&rd);
   FD_ZERO (&wr);
-  FD_SET ((int) s->listener->sck, &rd);
+  if (mem_ok)
+    FD_SET ((int) s->listener->sck, &rd);
   /* Output libxrdp couldn't send yet waits in trans->wait_s. */
   backlog = s->trans && s->trans->wait_s != NULL;
   if (s->trans)
@@ -2248,7 +2416,7 @@ server_step (unsigned max_wait_cs)
       if (gap > s->gap_max)
         s->gap_max = gap;
       held = s->input.applied[0x70] || s->input.applied[0x71] || s->input.applied[0x72];
-      if (gap >= GAP_LOG_CS && s->opt && s->opt->verbose)
+      if (gap >= GAP_LOG_CS && s->verbose)
         say ("no turn for %u cs%s", gap, held ? " (a mouse button held)" : "");
     }
   r = step (max_wait_cs);
@@ -2267,7 +2435,7 @@ server_step (unsigned max_wait_cs)
     s->stats_at = t + 500;
   else if ((int) (t - s->stats_at) >= 0)
     {
-      if (s->opt && s->opt->verbose && s->trans)
+      if (s->verbose && s->trans)
         say ("last 5 s: %u steps, %u reads (most %u in one step), %u scans, "
              "longest step %u cs, longest wait %u cs, %u tiles sent in all (%u as fills), %u KB/s, "
              "a pass over the screen %u cs, %u KB/s read from the screen",
@@ -2278,7 +2446,8 @@ server_step (unsigned max_wait_cs)
                                       : s->cap.bytes_read) / 5 / 1024));
       s->stats_bytes = rdps_bytes_sent;
       s->stats_read = s->cap.bytes_read;
-      s->slow_said = 0;
+      if (s->verbose)
+        s->slow_said = 0;     /* the plain log: 5 a server run */
       s->steps = s->reads = s->most_reads = s->scans = s->step_cs_max = 0;
       s->gap_max = 0;
       s->stats_at = t + 500;
@@ -2349,6 +2518,20 @@ server_restart_done (void)
   if (s->restart_due)
     return !s->trans || !s->was_up;     /* nobody to tell: don't wait */
   return s->restarting && s->restart_state == 3;
+}
+
+/* Choices' "detailed log": every click, key, wheel and network check,
+   and the figures every 5 s, from now. (libxrdp's own log keeps the level
+   it started with: it says little after a client connects.) */
+void
+server_set_verbose (int on)
+{
+  server *s = &srv;
+  if ((on != 0) == s->verbose)
+    return;
+  s->verbose = on != 0;
+  s->snd.verbose = s->verbose;
+  say (s->verbose ? "detailed log on" : "detailed log off");
 }
 
 /* (Only a flag: called from the front end, it mustn't send anything
@@ -2518,7 +2701,7 @@ status_details (server *s, server_status *st)
     snprintf (st->sound, sizeof st->sound, "after the login");
   else if (s->snd.stage == 3)
     snprintf (st->sound, sizeof st->sound, "to the client, %u Hz 16-bit stereo%s",
-              s->snd.rate, s->snd.mute_local ? ", this computer muted" : "");
+              s->snd.out_rate, s->snd.mute_local ? ", this computer muted" : "");
   else if (s->snd.stage > 0)
     snprintf (st->sound, sizeof st->sound, "starting");
   else

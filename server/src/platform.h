@@ -113,6 +113,35 @@ void plat_sound_stats (plat_sound_info *i);
 int plat_sound_ok (void);
 void plat_sound_stop (void);
 
+/* Memory (the module's heap, src/mod/libc.c; 0.2-test31). A session
+   keeps a block back (plat_memory_reserve), given up when a claim fails so
+   that libxrdp, which doesn't check, still gets its small claims;
+   plat_memory_short then says so once (and clears). plat_memory_info: the
+   heap's size now and most, and whether RISC OS refused to make it
+   bigger. Linux: none of it. */
+int plat_memory_reserve (unsigned bytes);
+int plat_memory_short (void);
+void plat_memory_info (unsigned *used_kb, unsigned *max_kb, int *refused);
+
+/* NEON (the module on RISC OS 5, src/mod/vfpctx.c; 0.2-test28: only
+   measured, at start-up). The NEON registers belong to whichever program
+   has a VFP context active, so the module makes its own (VFPSupport) and
+   switches to it around any NEON work, lazily: plat_neon_enter, then
+   plat_neon_leave. plat_neon_start makes it, once: 1 if NEON can be used.
+   plat_neon_reset after the server thread was thrown away (switch back
+   if it was left entered); plat_neon_stop at the end. Linux: none. */
+int plat_neon_start (void);
+int plat_neon_enter (void);            /* 0, or -1: no NEON */
+void plat_neon_leave (void);
+void plat_neon_reset (void);
+void plat_neon_stop (void);
+/* 32 bpp RISC OS pixels (rgb 0: TBGR, 1: TRGB) to the client's 32 or 16
+   bpp, as pixels.c does; pixels a multiple of 8. 0, or -1 if not done. */
+int plat_neon_convert (int rgb, int client_bpp, void *dst, const void *src,
+                       unsigned pixels);
+/* bytes: a multiple of 64 */
+void plat_neon_copy (void *dst, const void *src, unsigned bytes);
+
 /* Path of the folder for rsakeys.ini, xrdp.ini and so on, and of the
    folder for things the server writes. */
 const char *plat_resources_dir (void);

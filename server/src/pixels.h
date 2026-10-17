@@ -39,6 +39,21 @@ void pix_set_palette (const uint32_t *rgb, int n);
 void pix_convert (pix_format f, const unsigned char *src, size_t src_stride,
                   int w, int h, int client_bpp, void *dst);
 
+/* pix_convert for 32 bpp screens to 32, 24 or 16 bpp clients, a pixel at a
+   time without the general unpack and pack (0.2-test28). 0, or -1 for the
+   other formats (nothing written). */
+int pix_convert_fast (pix_format f, const unsigned char *src, size_t src_stride,
+                      int w, int h, int client_bpp, void *dst);
+
+/* pix_convert the quickest way allowed (0.2-test30): NEON if pix_use_neon
+   (the module's VFP context switched to and back around it), else the
+   simpler loop if pix_use_fast, for the formats those take; else
+   pix_convert. The server sets the two only after each made exactly
+   pix_convert's pixels at start-up. */
+extern int pix_use_neon, pix_use_fast;
+void pix_convert_best (pix_format f, const unsigned char *src, size_t src_stride,
+                       int w, int h, int client_bpp, void *dst);
+
 /* Bytes per pixel libxrdp wants for a client depth. */
 int pix_client_bytes (int client_bpp);
 

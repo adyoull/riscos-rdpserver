@@ -304,8 +304,8 @@ for i in $(seq 1 30); do [ "$(grep -c "client up" "$OUT/server.log")" -ge 13 ] &
 sleep 5
 kill $CPID 2>/dev/null; wait $CPID 2>/dev/null
 for i in $(seq 1 10); do [ "$(grep -c "client gone" "$OUT/server.log")" -gt "$before_gone" ] && break; sleep 1; done
-grep -q "sound: to the client, 48000 Hz 16-bit stereo" "$OUT/server.log" \
-  && ok "sound: the client takes 48 kHz 16-bit stereo" || bad "sound: no format agreed: $(grep 'sound' "$OUT/server.log" | tail -2)"
+grep -q "sound: to the client, 24000 Hz 16-bit stereo (from 48000 Hz" "$OUT/server.log" \
+  && ok "sound: the client takes 24 kHz 16-bit stereo (half the computer's 48)" || bad "sound: no format agreed: $(grep 'sound' "$OUT/server.log" | tail -2)"
 line=$(grep "sound ended: [0-9]* blocks sent" "$OUT/server.log" | tail -1)
 sent=$(echo "$line" | sed -n 's/.*sound ended: \([0-9]*\) blocks sent, \([0-9]*\) confirmed.*/\1/p')
 conf=$(echo "$line" | sed -n 's/.*sound ended: \([0-9]*\) blocks sent, \([0-9]*\) confirmed.*/\2/p')

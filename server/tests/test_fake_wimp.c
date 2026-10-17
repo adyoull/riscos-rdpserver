@@ -48,6 +48,8 @@ static int tls_calls, tls_set = -1;
 void server_set_require_tls (int on) { tls_calls++; tls_set = on; }
 static int sound_calls, sound_set = -1;
 void server_set_sound (int on) { sound_calls++; sound_set = on; }
+static int verbose_calls, verbose_set = -1;
+void server_set_verbose (int on) { verbose_calls++; verbose_set = on; }
 static char choices[64];
 const char *plat_choices_dir (void) { return choices; }
 void server_get_status (server_status *st) { *st = fake_status; st->login_set = have_login; }
@@ -92,7 +94,7 @@ static const char *menu_ptr;
 static int menu_x, menu_y, menu_calls;
 static char reported[256];
 static int caret[6], processed_key = -1, pointer_buttons;
-static int store[8][22 + 8 * 13];
+static int store[8][22 + 8 * 16];
 
 static const _kernel_oserror *wimp (int swi, int r[10])
 {
@@ -110,7 +112,7 @@ static const _kernel_oserror *wimp (int swi, int r[10])
       r[0] = 3;
       return NULL;
     case Wimp_CreateWindow:
-      memcpy (store[windows], b, sizeof store[windows]);
+      memcpy (store[windows], b, sizeof (int) * (size_t) (22 + 8 * (b[21] < 16 ? b[21] : 16)));
       window_blocks[windows] = store[windows];
       window_icons[windows] = b[21];
       r[0] = FIRST_WINDOW + windows++;
@@ -240,14 +242,16 @@ int main (void)
   w.logins_file = "unused"; w.log_file = log;
 
   CHECK (wimp_read_port (settings, 3389) == 3389, "no settings file: port 3389");
-  CHECK (wimp_write_settings (settings, 3390, 1, 1, 1) == 0 && wimp_read_port (settings, 3389) == 3390
+  CHECK (wimp_write_settings (settings, 3390, 1, 1, 1, 1) == 0 && wimp_read_port (settings, 3389) == 3390
          && wimp_read_tls (settings, 0) == 1,
          "the port is saved and read back");
   CHECK (wimp_read_mute (settings, 0) == 1, "and the mute choice");
   CHECK (wimp_read_sound (settings, 0) == 1, "and the sound choice");
-  CHECK (wimp_write_settings (settings, 3390, 0, 0, 0) == 0 && wimp_read_mute (settings, 1) == 0
-         && wimp_read_tls (settings, 1) == 0 && wimp_read_sound (settings, 1) == 0,
-         "mute and sound off are saved too");
+  CHECK (wimp_read_log (settings, 0) == 1, "and the detailed log choice");
+  CHECK (wimp_write_settings (settings, 3390, 0, 0, 0, 0) == 0 && wimp_read_mute (settings, 1) == 0
+         && wimp_read_tls (settings, 1) == 0 && wimp_read_sound (settings, 1) == 0
+         && wimp_read_log (settings, 1) == 0,
+         "mute, sound and the detailed log off are saved too");
   f = fopen (settings, "w"); fputs ("port 99999\n", f); fclose (f);
   CHECK (wimp_read_port (settings, 3389) == 3389, "a port out of range is ignored");
   f = fopen (settings, "w"); fputs ("port 5000\n", f); fclose (f);
@@ -260,7 +264,7 @@ int main (void)
   CHECK (strcmp ((const char *) bar_block[6], "!rdpserver") == 0 && bar_block[7] == 1,
          "the !rdpserver sprite, from the Wimp's pool");
   CHECK (((bar_block[5] >> 12) & 15) == 3, "the icon reports clicks");
-  CHECK (window_icons[1] == 13, "Choices has its thirteen icons");
+  CHECK (window_icons[1] == 14, "Choices has its fourteen icons");
   CHECK (((window_blocks[1][22 + 8 * 1 + 4] >> 12) & 15) == 15
          && ((window_blocks[1][22 + 8 * 5 + 4] >> 12) & 15) == 15, "port and password are writable");
   CHECK (strncmp ((const char *) window_blocks[1][22 + 8 * 5 + 6], "D*", 2) == 0,
@@ -420,7 +424,7 @@ int main (void)
   /* Choices: mute this computer while a client listens. */
   {
     const int *mi = &window_blocks[1][22 + 8 * 10];
-    CHECK (window_icons[1] == 13 && (mi[4] & 0x3) == 0x3 && ((mi[4] >> 12) & 15) == 3
+    CHECK (window_icons[1] == 14 && (mi[4] & 0x3) == 0x3 && ((mi[4] >> 12) & 15) == 3
            && strcmp ((const char *) mi[6], "Soptoff,opton") == 0
            && strstr ((const char *) mi[5], "Mute this computer"),
            "Choices has the mute option (text and optoff/opton sprites, reports clicks)");
@@ -472,6 +476,28 @@ int main (void)
     click (CHOICES, 12, Button_Select);
     CHECK (click (CHOICES, 9, Button_Select) == 0 && sound_calls == 2 && sound_set == 0
            && o.send_sound == 0 && wimp_read_sound (settings, 1) == 0, "off again, saved");
+  }
+
+  /* Choices: the detailed log (off unless chosen, 0.2-test26), told to
+     the running server on Save, kept in Settings. */
+  {
+    const int *li = &window_blocks[1][22 + 8 * 13];
+    CHECK (strstr ((const char *) li[5], "Detailed log") && ((li[4] >> 12) & 15) == 3
+           && strcmp ((const char *) li[6], "Soptoff,opton") == 0, "Choices has the detailed log option");
+    CHECK (o.verbose == 0, "no detailed log to start with");
+    click (-2, 3, Button_Adjust);
+    click (CHOICES, 13, Button_Select);
+    CHECK (verbose_calls == 0 && o.verbose == 0, "a click ticks it, not used until Save");
+    started = finished = 0;
+    CHECK (click (CHOICES, 9, Button_Select) == 0 && verbose_calls == 1 && verbose_set == 1
+           && o.verbose == 1 && started == 0 && finished == 0,
+           "Save: the running server is told (no restart)");
+    CHECK (wimp_read_log (settings, 0) == 1 && wimp_read_sound (settings, 1) == 0,
+           "saved, with the other choices");
+    click (-2, 3, Button_Adjust);
+    click (CHOICES, 13, Button_Select);
+    CHECK (click (CHOICES, 9, Button_Select) == 0 && verbose_calls == 2 && verbose_set == 0
+           && o.verbose == 0 && wimp_read_log (settings, 1) == 0, "off again, saved");
   }
 
   /* Choices: only allow TLS connections. */

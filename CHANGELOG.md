@@ -1,5 +1,62 @@
 # Changelog
 
+## RDPServer 0.2-rc3 (17 October 2026)
+
+Reliability
+- Connecting from Windows 11 made the module abort ("the server was
+  lost"). libxrdp claimed a buffer for every fast-path PDU it sent, as
+  big as the client says it takes (about 1.3 MB from FreeRDP, more from
+  Windows 11), without checking the claim; in RISC OS's smaller memory it
+  failed, and the mouse pointer was written through a null buffer. The
+  buffer is now at most 128 KB (libxrdp patch 0009): the server's PDUs
+  are far smaller, and smaller ones than the client takes are allowed.
+- Running out of memory no longer aborts the module: it keeps a 1 MB
+  block back while serving, given up when a small claim fails so that
+  the claim succeeds; the session then ends with "out of memory" in the
+  Log (saying whether RISC OS had no more to give or RDPServer reached
+  its most), and no connections are taken until there's memory again.
+- RDPServer's memory could grow to 48 MB, too little for the login page
+  of a 4K screen (the page and a copy of it, 33 MB each): now 128 MB (48
+  if RISC OS won't give that much address space). It only grows as
+  needed. The Log says how much it has when a client comes up or gets
+  the login screen; !Help has a "Memory" section.
+
+Speed
+- Converting the screen's pixels to the client's colours took about
+  18 ms a whole 1920 x 1200 screen on a Pi 4 (21 ms to 16 bpp clients).
+  In 32 bpp screen modes it's now done by NEON where the processor has
+  it (3 and 4 ms), else by a simpler loop (8 and 10 ms), each only if at
+  start-up it made exactly the same pixels as the general way, in both
+  32 bpp pixel orders. The screen is read by NEON too where that's
+  quicker than LDM 8. NEON runs in the module's own VFP context
+  (VFPSupport), switched to around each scan and each tile and back at
+  once, never across a moment when other programs run, so programs
+  using VFP or NEON themselves aren't disturbed. The Log says which ways
+  are used ("screen read by", "converting by"). *Set RDPServer$NEON 0
+  not to use NEON; RDPServer$ScreenCopy 3 reads the screen by NEON
+  whichever is quicker.
+- Sound was choppy over Wi-Fi: it went as 16-bit stereo at the
+  computer's own rate, about 1.5 Mbit/s at 48 kHz, in the same
+  connection as the screen. It now goes at half the rate while that's
+  still 22 kHz or more (44.1 kHz as 22.05, 48 as 24; each pair of
+  samples averaged), half as much to send. A client that won't take the
+  lower rate gets the full one; *Set RDPServer$SoundRate 0 always sends
+  the full rate. The Log says both rates.
+
+The Log
+- The Log recorded every click, key, wheel event and network check, and
+  figures every 5 seconds, all the time: about 200 KB an hour while a
+  client was connected, and every click's position. That detail is now
+  a Choices option, "Detailed log (for reporting problems)", off to
+  start with, taking effect at once. Without it the Log keeps start-up,
+  connections, logins, security, sound, memory and anything slow (5
+  "slow" lines a server run). !Run no longer passes -v. libxrdp's own
+  log (XrdpLog) keeps its few lines as each client connects.
+
+Other
+- The module is 0.31, its interface 7 (SET_VERBOSE added); the front
+  end and module must match.
+
 ## RDPServer 0.2-rc2 (15 October 2026)
 
 Security

@@ -47,6 +47,7 @@
 
 #include "fmt.h"
 #include "modrt.h"
+#include "../platform.h"
 #include "../srvthread.h"
 
 int errno;
@@ -93,6 +94,14 @@ set_errno_from (const _kernel_oserror *e)
 static int heap_area = -1;          /* dynamic area number */
 static char *heap;                  /* its base: the OS_Heap */
 static size_t heap_size, heap_max;
+/* Out of memory (0.2-test31): a block kept back during a session, given
+   up when a claim fails so that the claim, and the small ones after it
+   (libxrdp doesn't look for NULL from its stream claims), still succeed;
+   the server then ends the session (plat_memory_short). */
+static void *reserve;
+#define RESERVE_FOR (256 * 1024)  /* claims under this size only */
+static int mem_short;
+static int grow_refused;        /* RISC OS wouldn't make the area bigger */
 
 #define DA_FLAGS 0x80               /* user read/write, not draggable */
 #define HEAP_START (1024 * 1024)
@@ -165,8 +174,12 @@ heap_grow (size_t more)
   r[0] = heap_area;
   r[1] = (int) step;
   if (rdps_swi (OS_ChangeDynamicArea, r))
-    return -1;
+    {
+      grow_refused = 1;
+      return -1;
+    }
   step = (size_t) r[1];             /* what it actually grew by */
+  grow_refused = 0;
   memset (r, 0, sizeof r);
   r[0] = 5;                         /* OS_Heap 5: change the heap's size */
   r[1] = (int) heap;
@@ -181,8 +194,65 @@ heap_grow (size_t more)
    padding to keep the pointer 8-byte aligned. */
 #define BLOCK_HEAD 8
 
+static void *heap_claim_once (size_t n);
+
+static void
+heap_release (void *p)
+{
+  int r[10];
+  memset (r, 0, sizeof r);
+  r[0] = 3;                         /* OS_Heap 3: release */
+  r[1] = (int) heap;
+  r[2] = (int) ((char *) p - BLOCK_HEAD);
+  rdps_swi (OS_Heap, r);
+}
+
 static void *
 heap_claim (size_t n)
+{
+  void *p = heap_claim_once (n);
+  /* Only small claims may have the block kept back: libxrdp's streams,
+     which aren't checked. The big ones (the copy of the screen, the
+     login page) are the server's own, which are; letting them have it
+     would leave nothing for the small ones after. */
+  if (!p && reserve && n < RESERVE_FOR)
+    {
+      heap_release (reserve);
+      reserve = NULL;
+      mem_short = 1;
+      p = heap_claim_once (n);
+    }
+  if (!p)
+    mem_short = 1;
+  return p;
+}
+
+int
+plat_memory_reserve (unsigned bytes)
+{
+  if (!reserve)
+    reserve = heap_claim_once (bytes);
+  return reserve ? 0 : -1;
+}
+
+int
+plat_memory_short (void)
+{
+  int was = mem_short;
+  mem_short = 0;
+  return was;
+}
+
+void
+plat_memory_info (unsigned *used_kb, unsigned *max_kb, int *refused)
+{
+  *used_kb = (unsigned) (heap_size / 1024);
+  *max_kb = (unsigned) (heap_max / 1024);
+  *refused = grow_refused;
+}
+
+static void *
+heap_claim_once (size_t n)
 {
   int r[10], tries;
   if (!heap || n > 0x7fff0000u)
@@ -233,14 +303,9 @@ calloc (size_t a, size_t b)
 void
 free (void *p)
 {
-  int r[10];
   if (!p || !heap)
     return;
-  memset (r, 0, sizeof r);
-  r[0] = 3;                         /* OS_Heap 3: release */
-  r[1] = (int) heap;
-  r[2] = (int) ((char *) p - BLOCK_HEAD);
-  rdps_swi (OS_Heap, r);
+  heap_release (p);
 }
 
 void *

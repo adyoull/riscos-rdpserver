@@ -10,6 +10,7 @@ the front end's entries, the ticker and callback, the error box path
 Copyright (c) 2026 Andrew Youll. MIT licence (see LICENSE).
 """
 import os
+import re
 import socket
 import struct
 import sys
@@ -118,6 +119,20 @@ r = m.entry(START, options(m, port))
 msgs = messages(m)
 check(r == 0, "started (%s)" % msgs)
 check("listening on port %d" % port in msgs, "listening (%r)" % msgs)
+# NEON, measured at start-up only (0.2-test28): in the module's own VFP
+# context (the emulator aborts NEON outside one, and fails any call that
+# returns with it still active), giving the same pixels as pix_convert
+check("NEON: its own VFP context, a switch there and back" in msgs and m.vfp_switches >= 2,
+      "NEON: the module made its own VFP context and switched to it and back (%d switches)"
+      % m.vfp_switches)
+check(re.search(r"screen read: single words \d+ MB/s, LDM 8 \d+ MB/s, NEON \d+ MB/s", msgs),
+      "the screen read by NEON too (%r)" % [x for x in msgs.split("\n") if "screen read" in x])
+check("converting by NEON (32 bpp screens" in msgs,
+      "and converting by NEON is then used (%r)" % [x for x in msgs.split("\n") if "converting by" in x])
+conv = [x for x in msgs.split("\n") if "other ways" in x]
+check(len(conv) == 2 and all("NEON" in x and "(the same pixels)" in x and "DIFFERENT" not in x
+                             for x in conv),
+      "converting by a simpler loop and by NEON: the same pixels, at 32 and 16 bpp (%r)" % conv)
 st = status(m)
 check(st["listening"] == 1 and st["connected"] == 0, "status: listening, no client")
 try:
@@ -336,7 +351,10 @@ check(status(m3)["listening"] == 0, "the front end's Wimp_CloseDown stops the se
 check(m3.final(1) is None, "and the module can then be killed")
 
 # --- 11: the desktop shutting down: DETACH with keep (0.2-test23) ------------
+# (and a RISC OS without VFPSupport: no NEON, nothing else different)
+os.environ["EMU_NO_VFP"] = "1"
 m4 = RiscOS(MOD, base=RMA + 0xC000)
+del os.environ["EMU_NO_VFP"]
 m4.init()
 m4.alive_tasks = {9}
 m4.entry(ATTACH, 9)
@@ -346,6 +364,10 @@ set_file(m4, LOGINS_PATH, b"")
 port = free_port()
 m4.entry(START, options(m4, port))
 run_for(m4, 10)
+msgs = messages(m4, [0])
+check("NEON: not here" in msgs and "listening on port %d" % port in msgs,
+      "without VFPSupport: NEON not here, serving as ever (%r)"
+      % [x for x in msgs.split("\n") if "NEON" in x])
 m4.entry(DETACH, 1)
 m4.service(0, 0x53, 9)                 # and then its Wimp_CloseDown
 m4.alive_tasks = set()
@@ -358,6 +380,37 @@ check(m4.entry(ATTACH, 11) == 0, "a new front end can attach")
 check(status(m4)["listening"] == 0, "and takes over: the old server stopped")
 m4.entry(DETACH, 0)
 check(m4.final(1) is None, "and the module can then be killed")
+
+# --- 12: RDPServer$NEON 0 (0.2-test30): no NEON at all, even with the
+# screen read forced to NEON, and even after a server run that used it ---
+m5 = RiscOS(MOD, base=RMA + 0x10000)
+m5.init()
+m5.alive_tasks = {11}
+m5.entry(ATTACH, 11)
+set_file(m5, INI_PATH, INI)
+set_file(m5, KEYS_PATH, RSA)
+set_file(m5, LOGINS_PATH, b"")
+port = free_port()
+m5.entry(START, options(m5, port))
+run_for(m5, 5)
+msgs = messages(m5, [0])
+check("converting by NEON" in msgs and m5.vfp_contexts, "a first run uses NEON (%r)"
+      % [x for x in msgs.split("\n") if "NEON" in x])
+m5.entry(STOP)
+m5.vars["RDPServer$NEON"] = "0"
+m5.vars["RDPServer$ScreenCopy"] = "3"
+switches = m5.vfp_switches
+seq = [0]
+messages(m5, seq)
+m5.entry(START, options(m5, port))
+run_for(m5, 5)
+msgs = messages(m5, seq)
+check("NEON: not used (RDPServer$NEON 0)" in msgs and "screen read by NEON" not in msgs
+      and "converting by NEON" not in msgs and not m5.vfp_contexts and m5.vfp_switches == switches,
+      "RDPServer$NEON 0: its context destroyed, NEON neither read with nor converted with (%r)"
+      % [x for x in msgs.split("\n") if "NEON" in x or "screen read by" in x or "converting by" in x])
+m5.entry(DETACH, 0)
+check(m5.final(1) is None, "and the module can then be killed")
 
 print("RDPServer module (emulated ARM): %d checks, %d failed" % (checks, fails))
 sys.exit(1 if fails else 0)

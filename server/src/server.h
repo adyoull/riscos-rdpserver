@@ -74,6 +74,7 @@ void server_set_require_tls (int on);
 /* Choices changed "send this computer's sound to the client": off stops
    it now; on starts it for the next client. */
 void server_set_sound (int on);
+void server_set_verbose (int on);
 /* RISC OS is about to reset: tell the client (a page in the screen's
    place), and say when that has gone (0.2-test24). */
 void server_restarting (void);

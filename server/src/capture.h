@@ -41,6 +41,9 @@ typedef struct
    memcpy). CAP_COPY_LDM8 unless set otherwise. */
 #define CAP_COPY_WORDS 1
 #define CAP_COPY_LDM8 2
+#define CAP_COPY_NEON 3    /* NEON (0.2-test30): cap_scan switches to the
+                             module's VFP context around a scan; outside one,
+                             as LDM8 */
 extern int cap_copy_way;
 void cap_copy (void *dst, const void *src, size_t n);
 void cap_copy_with (int way, void *dst, const void *src, size_t n);

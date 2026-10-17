@@ -320,6 +320,13 @@ server_set_sound (int on)
 }
 
 void
+server_set_verbose (int on)
+{
+  if (table && attached)
+    call (RDPS_MOD_SET_VERBOSE, on, 0, 0);
+}
+
+void
 server_set_require_tls (int on)
 {
   if (table && attached)

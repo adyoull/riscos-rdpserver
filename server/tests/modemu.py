@@ -38,7 +38,7 @@ import struct
 import time
 
 from unicorn import Uc, UC_ARCH_ARM, UC_MODE_ARM, UC_HOOK_INTR, UC_HOOK_MEM_INVALID
-from unicorn import UC_HOOK_MEM_READ, UC_HOOK_MEM_WRITE
+from unicorn import UC_HOOK_MEM_READ, UC_HOOK_MEM_WRITE, UC_MEM_WRITE
 from unicorn import arm_const as A
 
 REGS = [getattr(A, "UC_ARM_REG_R%d" % i) for i in range(13)]
@@ -73,7 +73,10 @@ SWI = dict(OS_Byte=0x06, OS_Word=0x07, OS_EnterOS=0x16, OS_Heap=0x1D, OS_Module=
            OS_LeaveOS=0x7C, TaskManager_TaskNameFromHandle=0x42680,
            CryptRandom_Block=0x51983, Sound_SampleRate=0x40146,
            SharedSound_InstallHandler=0x4B440, SharedSound_RemoveHandler=0x4B441,
-           Sound_LinearHandler=0x40145, Emu_SharedSoundFill=0x4F000)
+           Sound_LinearHandler=0x40145, Emu_SharedSoundFill=0x4F000,
+           VFPSupport_CheckContext=0x58EC0, VFPSupport_CreateContext=0x58EC1,
+           VFPSupport_DestroyContext=0x58EC2, VFPSupport_ChangeContext=0x58EC3,
+           VFPSupport_Features=0x58EC8)
 SOCK = dict(Creat=0x41200, Bind=0x41201, Listen=0x41202, Connect=0x41204,
             Recv=0x41205, Send=0x41208, Shutdown=0x4120B, Setsockopt=0x4120C,
             Getsockopt=0x4120D, Close=0x41210, Select=0x41211, Ioctl=0x41212,
@@ -147,6 +150,11 @@ class RiscOS:
         mu.mem_write(RET, b"\xfe\xff\xff\xea")
         mu.hook_add(UC_HOOK_INTR, self._swi_hook)
         mu.hook_add(UC_HOOK_MEM_INVALID, self._bad_mem)
+        # Page zero is protected on RISC OS: a read or write there (through
+        # a null pointer, plus a little) aborts. Only the return address's
+        # code at RET is fetched from it here. (0.2-test31: a NULL stream
+        # buffer written at 7 went unnoticed.)
+        mu.hook_add(UC_HOOK_MEM_READ | UC_HOOK_MEM_WRITE, self._page_zero, begin=LOW, end=RET - 1)
         # RISC OS runs with alignment checking on: a 16/32-bit access that
         # isn't aligned to its size (LDRD/STRD and LDM/STM: to 4) aborts.
         # Unicorn doesn't trap them, so look at every access.
@@ -154,12 +162,32 @@ class RiscOS:
         if self.align_check:
             mu.hook_add(UC_HOOK_MEM_READ | UC_HOOK_MEM_WRITE, self._align)
         mu.reg_write(A.UC_ARM_REG_CPSR, 0x13)       # SVC32, interrupts on
+        # VFP/NEON: allowed by CPACR, but FPEXC.EN only while a context is
+        # active (VFPSupport), so a NEON instruction outside one aborts
+        mu.reg_write(A.UC_ARM_REG_C1_C0_2, mu.reg_read(A.UC_ARM_REG_C1_C0_2) | (0xF << 20))
+        # VFPSupport keeps a context "active" (the one in effect, perhaps
+        # only pending a lazy switch) and one whose registers are loaded;
+        # the current task (the front end) has its own, made by the
+        # emulator. Only the module's own contexts let NEON run here.
+        self.vfp_task = 0x7E000010
+        self.vfp_contexts = set()
+        self.vfp_module = set()
+        self.vfp_active = self.vfp_task
+        self.vfp_loaded = self.vfp_task
+        self.vfp_next = 0x7F000010
+        self.vfp_switches = 0
+        self.no_vfp = os.environ.get("EMU_NO_VFP", "0") != "0"
+        self._fpexc()
         self.verbose = verbose
         self.t0 = time.monotonic()
         self.rma_next = RMA + 0x00400000          # claims after the module
         self.err_next = ERRS
         self.heap = Heap()
         self.da_size = 0
+        self.da_limit = None      # memfill: no more memory for the area
+        self.hidden = []          # memfill: free heap space taken away
+        self.heap_fails = []      # sizes of OS_Heap claims refused
+        self.on_heap_fail = None  # (size, lr offset): told of each
         self.da_live = False
         self.tickers = []        # [addr, r12, period_cs or 0, due]
         self.callbacks = []      # [(addr, r12)]
@@ -203,6 +231,7 @@ class RiscOS:
         self.sw, self.sh, self.screen = SW, SH, SCREEN
         self.draw_screen()
         data = open(module_file, "rb").read()
+        self.code_size = len(data)
         self.base = base
         self.module = data
         mu.mem_write(base, data)
@@ -218,6 +247,16 @@ class RiscOS:
         pc = mu.reg_read(A.UC_ARM_REG_PC)
         self.fatal = "bad memory access at &%X (pc &%X, module +&%X)" % (addr, pc, pc - self.base)
         return False
+
+    def _page_zero(self, mu, access, addr, size, value, data):
+        pc = mu.reg_read(A.UC_ARM_REG_PC)
+        if not self.fatal:
+            lr = mu.reg_read(A.UC_ARM_REG_LR)
+            self.fatal = ("%s at &%X, page zero (pc &%X, module +&%X; lr module +&%X): a "
+                          "null pointer, an abort on RISC OS (claims refused: %s)"
+                          % ("write" if access == UC_MEM_WRITE else "read", addr, pc,
+                             pc - self.base, lr - self.base, self.heap_fails[-8:]))
+        mu.emu_stop()
 
     def _align(self, mu, access, addr, size, value, data):
         need = 4 if size >= 4 else size
@@ -295,6 +334,35 @@ class RiscOS:
         cpsr = self.mu.reg_read(A.UC_ARM_REG_CPSR)
         self.mu.reg_write(A.UC_ARM_REG_CPSR, (cpsr & 0x0FFFFF00) | mode)
 
+    def memfill(self, keep):
+        """As if RISC OS had no more memory and the heap were nearly full:
+        the area can't grow, and of its free space only `keep` bytes are
+        left (the rest hidden until memunfill)."""
+        self.da_limit = self.da_size
+        left, out = keep, []
+        for a, s in sorted(self.heap.free, key=lambda f: -f[1]):
+            if left >= s:
+                out.append((a, s))
+                left -= s
+            else:
+                if left >= 64:
+                    out.append((a, left))
+                    self.hidden.append((a + left, s - left))
+                else:
+                    self.hidden.append((a, s))
+                left = 0
+        self.heap.free = out
+        self.heap._merge()
+
+    def memunfill(self):
+        self.heap.free.extend(self.hidden)
+        self.hidden = []
+        self.heap._merge()
+        self.da_limit = None
+
+    def _fpexc(self):
+        self.mu.reg_write(A.UC_ARM_REG_FPEXC, 0x40000000 if self.vfp_active in self.vfp_module else 0)
+
     def call(self, addr, r=(), r12=None, max_insns=0, usr=False):
         """Calls addr: in SVC mode (sp = the empty SVC stack), as the kernel
         calls a module's handlers, or with usr=True in USR mode (sp = a user
@@ -336,6 +404,8 @@ class RiscOS:
         pc = mu.reg_read(A.UC_ARM_REG_PC)
         if pc != RET:
             raise Fatal("code at &%X didn't return (pc &%X, module +&%X)" % (addr, pc, pc - self.base))
+        if self.vfp_active != self.vfp_task:
+            raise Fatal("returned with the task's VFP context not active (&%X is)" % self.vfp_active)
         cpsr = mu.reg_read(A.UC_ARM_REG_CPSR)
         out = [mu.reg_read(x) for x in REGS]
         if (cpsr & 0x1F) != (0x10 if usr else 0x13):
@@ -365,6 +435,11 @@ class RiscOS:
             raise Fatal("killed with a SharedSound handler still installed")
         if self.lin[0] not in (0, self.ss_code):
             raise Fatal("killed with the linear handler still wrapped (&%X)" % self.lin[0])
+        if self.vfp_contexts:
+            raise Fatal("killed with its VFP context not destroyed")
+        if self.vfp_active != self.vfp_task:
+            raise Fatal("killed, leaving the task without its VFP context (&%X active)"
+                        % self.vfp_active)
         return None
 
     def service(self, r0, r1, r2=0):
@@ -520,6 +595,57 @@ class RiscOS:
             self._abandon = True
             mu.emu_stop()
 
+    def vfpsupport(self, n, r):
+        """VFPSupport, as RISC OS 5's (PRM p700-709); EMU_NO_VFP=1: not
+        there (its SWIs unknown)."""
+        if self.no_vfp:
+            return self.error(0x1E6, "SWI not known")
+        if n == SWI["VFPSupport_Features"]:
+            if r[0] != 0:
+                return self.error(0x1E6, "bad reason")
+            r[0], r[1], r[2] = 0x41034080, 0x10110222, 0x11111111  # Cortex-A72-ish
+        elif n == SWI["VFPSupport_CheckContext"]:
+            r[0] = 8 + 8 * r[1]
+        elif n == SWI["VFPSupport_CreateContext"]:
+            if r[1] < 1 or r[1] > 32 or r[0] & ~0xC0000003:
+                return self.error(0x58EC0, "bad context flags")
+            ctx = self.vfp_next
+            self.vfp_next += 0x100
+            self.vfp_contexts.add(ctx)
+            self.vfp_module.add(ctx)
+            if r[0] & 0xC0000000:
+                r[1] = self.vfp_active
+                self.vfp_active = ctx
+                if r[0] & 0x80000000:
+                    self.vfp_loaded = ctx
+                self._fpexc()
+            r[0] = ctx
+        elif n == SWI["VFPSupport_ChangeContext"]:
+            if r[0] and r[0] not in self.vfp_contexts and r[0] != self.vfp_task:
+                raise Fatal("VFPSupport_ChangeContext to &%X, not a context" % r[0])
+            old = self.vfp_active
+            if old in self.vfp_module:
+                self.vfp_loaded = old       # (taken as used: NEON ran in it)
+            self.vfp_active = r[0]
+            if not r[1] & 1:                # not lazy: loaded now
+                self.vfp_loaded = r[0]
+            self.vfp_switches += 1
+            self._fpexc()
+            r[0] = old
+        elif n == SWI["VFPSupport_DestroyContext"]:
+            if r[0] not in self.vfp_contexts:
+                raise Fatal("VFPSupport_DestroyContext of &%X, not a context" % r[0])
+            self.vfp_contexts.discard(r[0])
+            self.vfp_module.discard(r[0])
+            # "currently active": in effect, or still loaded with a lazy
+            # switch away from it pending; R1 then takes its place (and a
+            # pending switch to another is lost)
+            if r[0] in (self.vfp_active, self.vfp_loaded):
+                self.vfp_active = self.vfp_loaded = r[1]
+                self._fpexc()
+            r[0] = self.vfp_active
+        return None
+
     def sock_error(self, e):
         n = BSD_ERRNO.get(getattr(e, "errno", None) or errno.EIO, 5)
         return self.error(0x20E00 | n, os.strerror(getattr(e, "errno", 5) or 5))
@@ -534,6 +660,10 @@ class RiscOS:
             return None
         if n == SWI["OS_ReadMonotonicTime"]:
             r[0] = self.cs()
+        elif n in (SWI["VFPSupport_Features"], SWI["VFPSupport_CheckContext"],
+                   SWI["VFPSupport_CreateContext"], SWI["VFPSupport_DestroyContext"],
+                   SWI["VFPSupport_ChangeContext"]):
+            return self.vfpsupport(n, r)
         elif n == SWI["OS_Byte"]:
             if r[0] in (121, 202):
                 r[1] = 0
@@ -649,6 +779,8 @@ class RiscOS:
         elif n == SWI["OS_ChangeDynamicArea"]:
             if self.da_size + r[1] > DA_MAX:
                 return self.error(0x1E6, "area full")
+            if self.da_limit is not None and self.da_size + r[1] > self.da_limit:
+                return self.error(0x1E6, "Unable to move memory")
             self.da_size += r[1]
         elif n == SWI["OS_Heap"]:
             if r[0] == 0:
@@ -656,6 +788,15 @@ class RiscOS:
             elif r[0] == 2:
                 a = self.heap.claim(r[3])
                 if not a:
+                    self.heap_fails.append(r[3])
+                    if self.on_heap_fail:
+                        # (return addresses on the stack, roughly: words
+                        # that point into the module's code)
+                        sp = self.mu.reg_read(A.UC_ARM_REG_SP)
+                        words = struct.unpack("<96I", bytes(self.mu.mem_read(sp, 384)))
+                        rets = ["+&%X" % (w - self.base) for w in words
+                                if self.base < w < self.base + self.code_size][:8]
+                        self.on_heap_fail(r[3], " ".join(rets))
                     return self.error(0x184, "Heap full")
                 r[2] = a
             elif r[0] == 3:

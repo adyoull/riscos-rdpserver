@@ -80,6 +80,8 @@ static int tls_arg = -1;
 static int m_set_tls (int on, int b, int c) { (void) b; (void) c; tls_arg = on; return 0; }
 static int sound_arg = -1;
 static int m_set_sound (int on, int b, int c) { (void) b; (void) c; sound_arg = on; return 0; }
+static int verbose_arg = -1;
+static int m_set_verbose (int on, int b, int c) { (void) b; (void) c; verbose_arg = on; return 0; }
 static int m_messages (int seqp, int buf, int size)
 {
   unsigned *seq = (unsigned *) (intptr_t) seqp;
@@ -95,7 +97,7 @@ static int m_messages (int seqp, int buf, int size)
 typedef int entry_fn (int, int, int);
 static entry_fn *const fns[RDPS_MOD_ENTRIES] = {
   m_attach, m_detach, m_set_file, m_start, m_stop, m_disconnect, m_reload, m_status, m_messages, m_set_mute, m_set_tls,
-  m_set_sound };
+  m_set_sound, m_set_verbose };
 
 /* modcall.s, here in C */
 int
@@ -225,7 +227,7 @@ main (void)
   loaded = 1;
   module.table.version = 1;
   module.table.entries = 9;
-  CHECK (server_start (&o) == 1 && strstr (server_start_error (), "has interface 1,9; this !RDPServer needs 6,12"),
+  CHECK (server_start (&o) == 1 && strstr (server_start_error (), "has interface 1,9; this !RDPServer needs 7,13"),
          "an older module (test10's): both versions said");
   module.table.entries = RDPS_MOD_ENTRIES;
   module.table.version = 99;
@@ -289,6 +291,8 @@ main (void)
   CHECK (calls[RDPS_MOD_SET_REQUIRE_TLS] == 1 && tls_arg == 0, "and its TLS choice");
   server_set_sound (0);
   CHECK (calls[RDPS_MOD_SET_SOUND] == 1 && sound_arg == 0, "and its sound choice");
+  server_set_verbose (1);
+  CHECK (calls[RDPS_MOD_SET_VERBOSE] == 1 && verbose_arg == 1, "and its detailed log choice");
   server_finish ();
   CHECK (calls[RDPS_MOD_STOP] == 1, "server_finish stops it");
   CHECK (calls[RDPS_MOD_DETACH] == 0 && killed == 0, "but keeps the module");

@@ -7,10 +7,20 @@ ELF=$1 MOD=$2
 OBJDUMP=${OBJDUMP:-$(dirname "$(command -v arm-linux-gnueabihf-objdump 2>/dev/null || echo /usr/bin/x)")/arm-linux-gnueabihf-objdump}
 [ -x "$OBJDUMP" ] || OBJDUMP="${RISCOS_TOOLCHAIN:-$HOME/riscos-toolchain-1.4}/bin/arm-riscos-gnueabihf-objdump"
 fails=0
-# VFP/NEON: any instruction on coprocessors 10/11 or a v-mnemonic
-if "$OBJDUMP" -d "$ELF" | grep -E '^\s+[0-9a-f]+:\s+[0-9a-f]{8}\s+v[a-z]' | head -3 | grep -q .; then
-  echo "check-module: VFP/NEON instructions:"; "$OBJDUMP" -d "$ELF" | grep -E '^\s+[0-9a-f]+:\s+[0-9a-f]{8}\s+v[a-z]' | head -5
+# VFP/NEON: any instruction on coprocessors 10/11 or a v-mnemonic, outside
+# src/neon.s's rdps_neon_* routines (run only in the module's own VFP
+# context, src/mod/vfpctx.c; 0.2-test28)
+vfp_outside () {
+  "$OBJDUMP" -d "$ELF" | awk '/^[0-9a-f]+ <[^>]+>:$/ { f = $2 }
+    /^[ \t]+[0-9a-f]+:[ \t]+[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][ \t]+v[a-z]/ \
+      && f !~ /^<rdps_neon_/ { print f, $0 }'  # (no {8}: mawk hasn't intervals)
+}
+if vfp_outside | head -3 | grep -q .; then
+  echo "check-module: VFP/NEON instructions:"; vfp_outside | head -5
   fails=1
+fi
+if ! "$OBJDUMP" -d "$ELF" | grep -q '<rdps_neon_tbgr_to_32>:'; then
+  echo "check-module: no rdps_neon_tbgr_to_32 (the check above would pass anything)"; fails=1
 fi
 # UnixLib must not be in it
 if "$OBJDUMP" -t "$ELF" | grep -E '__unixlib|__ul_global|_main$|__pthread' | head -3 | grep -q .; then
@@ -24,7 +34,7 @@ h = struct.unpack_from('<13I', d, 0)
 ok = h[0] == 0 and 0 < h[1] < len(d) and 0 < h[2] < len(d) and h[4] < len(d)
 t = d[h[4]:d.index(b'\0', h[4])]
 magic, ver, n = struct.unpack_from('<3I', d, 0x34)
-ok = ok and t == b'RDPServer' and magic == 0x73504452 and ver == 6 and n == 12
+ok = ok and t == b'RDPServer' and magic == 0x73504452 and ver == 7 and n == 13
 if not ok:
     print("check-module: bad header", h, t, hex(magic), ver, n); sys.exit(1)
 PY

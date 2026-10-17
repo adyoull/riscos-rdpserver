@@ -39,8 +39,8 @@ module_base:
 @ &34: the front end's table (modapi.h)
 table:
         .word   0x73504452                      @ "RDPs"
-        .word   6                               @ interface version (6: DETACH can leave the server running)
-        .word   12                              @ entries
+        .word   7                               @ interface version (7: SET_VERBOSE)
+        .word   13                              @ entries
         .word   e_attach - module_base
         .word   e_detach - module_base
         .word   e_set_file - module_base
@@ -53,6 +53,7 @@ table:
         .word   e_set_mute - module_base
         .word   e_set_tls - module_base
         .word   e_set_sound - module_base
+        .word   e_set_verbose - module_base
         .if     table - module_base - 0x34
         .error  "the table must follow the module header (&34)"
         .endif
@@ -69,7 +70,7 @@ bss_start:      .word   0
 bss_end:        .word   0
 
 title:  .asciz  "RDPServer"
-help:   .asciz  "RDPServer\t0.25 (15 Oct 2026) RDP server (the !RDPServer front end runs it)"
+help:   .asciz  "RDPServer\t0.31 (17 Oct 2026) RDP server (the !RDPServer front end runs it)"
         .balign 4
 flags:  .word   1                               @ 32-bit compatible
 
@@ -234,6 +235,7 @@ errorbox_open_addr:
         ENTRY   e_set_mute, mod_set_mute
         ENTRY   e_set_tls, mod_set_require_tls
         ENTRY   e_set_sound, mod_set_sound
+        ENTRY   e_set_verbose, mod_set_verbose
 
 @ --- capturing the sound (sndcap.c) ----------------------------------------
 @ A SharedSound "process" handler can't hear everything: SharedSound calls

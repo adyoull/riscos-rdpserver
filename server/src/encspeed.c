@@ -48,6 +48,7 @@ typedef struct
   size_t row_bytes;
   int bits, cbpp;
   unsigned char *conv;          /* ntiles converted tiles */
+  unsigned char *conv2;         /* the same, another way */
   struct stream *out[MAX_TILES];/* ntiles compressed tiles */
   struct stream *tmp;
   struct xrdp_mppc_enc *mppc;
@@ -62,6 +63,43 @@ do_convert (void *v, int t)
   pix_convert (c->fmt, c->band + (size_t) t * TILE * c->bits / 8, c->row_bytes,
                TILE, TILE, c->cbpp, c->conv + (size_t) t * TILE * TILE * 4);
   return 0;
+}
+
+static int
+do_convert_fast (void *v, int t)
+{
+  enc_ctx *c = v;
+  pix_convert_fast (c->fmt, c->band + (size_t) t * TILE * c->bits / 8, c->row_bytes,
+                    TILE, TILE, c->cbpp, c->conv2 + (size_t) t * TILE * TILE * 4);
+  return 0;
+}
+
+static int
+do_convert_neon (void *v, int t)
+{
+  enc_ctx *c = v;
+  int y, cb = pix_client_bytes (c->cbpp);
+  for (y = 0; y < TILE; y++)
+    plat_neon_convert (c->fmt == PIX_32_TRGB, c->cbpp,
+                       c->conv2 + (size_t) t * TILE * TILE * 4 + (size_t) y * TILE * cb,
+                       c->band + (size_t) y * c->row_bytes + (size_t) t * TILE * 4, TILE);
+  return 0;
+}
+
+/* The other way over all the tiles once: whether it made the same */
+static int
+same_as_convert (enc_ctx *c, stage_fn fn, int ntiles)
+{
+  size_t n = (size_t) TILE * TILE * (size_t) pix_client_bytes (c->cbpp);
+  int i, same = 1;
+  memset (c->conv2, 0x5a, (size_t) ntiles * TILE * TILE * 4);
+  for (i = 0; i < ntiles; i++)
+    fn (c, i);
+  /* each tile's pixels, packed at the start of its 4-bytes-a-pixel slot */
+  for (i = 0; i < ntiles; i++)
+    if (memcmp (c->conv + (size_t) i * TILE * TILE * 4, c->conv2 + (size_t) i * TILE * TILE * 4, n) != 0)
+      same = 0;
+  return same;
 }
 
 static int
@@ -119,11 +157,12 @@ rdps_encode_speed (const rdps_screen *scr, pix_format fmt, int cbpp, unsigned cs
     ntiles = MAX_TILES;
   c.band = malloc (row_bytes * TILE);
   c.conv = malloc ((size_t) ntiles * TILE * TILE * 4);
+  c.conv2 = malloc ((size_t) ntiles * TILE * TILE * 4);
   make_stream (c.tmp);
   c.mppc = mppc_enc_new (PROTO_RDP_50);
   for (i = 0; i < ntiles; i++)
     make_stream (c.out[i]);
-  if (!c.band || !c.conv || !c.tmp || !c.mppc)
+  if (!c.band || !c.conv || !c.conv2 || !c.tmp || !c.mppc)
     goto done;
   for (i = 0; i < ntiles; i++)
     if (!c.out[i])
@@ -144,6 +183,35 @@ rdps_encode_speed (const rdps_screen *scr, pix_format fmt, int cbpp, unsigned cs
     do_mppc (&c, i);
   c.count_bytes = 0;
   r->convert_tps = rate (do_convert, &c, ntiles, cs);
+  /* the other ways (measured only, 0.2-test28): 32 bpp screens to 32 or
+     16 bpp; NEON between plat_neon_enter and plat_neon_leave, the turn
+     running on without a yield */
+  if ((fmt == PIX_32_TBGR || fmt == PIX_32_TRGB) && (cbpp == 32 || cbpp == 16))
+    {
+      /* the same pixels from the band taken as the other 32 bpp order
+         too (RGB or BGR), so a mode change between them is covered */
+      pix_format other = fmt == PIX_32_TBGR ? PIX_32_TRGB : PIX_32_TBGR;
+      r->fast_same = same_as_convert (&c, do_convert_fast, ntiles);
+      r->fast_tps = rate (do_convert_fast, &c, ntiles, cs);
+      if (plat_neon_enter () == 0)
+        {
+          r->neon_same = same_as_convert (&c, do_convert_neon, ntiles);
+          r->neon_tps = rate (do_convert_neon, &c, ntiles, cs);
+          plat_neon_leave ();
+        }
+      c.fmt = other;
+      for (i = 0; i < ntiles; i++)
+        do_convert (&c, i);
+      r->fast_same = r->fast_same && same_as_convert (&c, do_convert_fast, ntiles);
+      if (r->neon_tps && plat_neon_enter () == 0)
+        {
+          r->neon_same = r->neon_same && same_as_convert (&c, do_convert_neon, ntiles);
+          plat_neon_leave ();
+        }
+      c.fmt = fmt;
+      for (i = 0; i < ntiles; i++)
+        do_convert (&c, i);           /* (what compress times, as before) */
+    }
   r->compress_tps = rate (do_compress, &c, ntiles, cs);
   /* (the timed MPPC passes compress what the last compress pass made) */
   r->mppc_tps = rate (do_mppc, &c, ntiles, cs);
@@ -166,6 +234,7 @@ done:
     mppc_enc_free (c.mppc);
   free ((void *) c.band);
   free (c.conv);
+  free (c.conv2);
   return ok;
 }
 

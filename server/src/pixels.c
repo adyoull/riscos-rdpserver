@@ -2,6 +2,7 @@
    Copyright (c) 2026 Andrew Youll. MIT licence (see LICENSE). */
 #include <string.h>
 #include "pixels.h"
+#include "platform.h"
 
 #define MF_RGB_ORDER  (1u << 14)
 #define MF_FULL_PAL   (1u << 7)
@@ -181,6 +182,75 @@ pix_convert (pix_format f, const unsigned char *src, size_t src_stride,
           else *d32++ = v;
         }
     }
+}
+
+int
+pix_convert_fast (pix_format f, const unsigned char *src, size_t src_stride,
+                  int w, int h, int client_bpp, void *dst)
+{
+  int x, y, rgb;
+  if (f != PIX_32_TBGR && f != PIX_32_TRGB)
+    return -1;
+  if (client_bpp != 16 && client_bpp != 24 && client_bpp != 32)
+    return -1;
+  rgb = f == PIX_32_TRGB;
+  for (y = 0; y < h; y++)
+    {
+      const uint32_t *s = (const uint32_t *) (const void *) (src + (size_t) y * src_stride);
+      if (client_bpp == 16)
+        {
+          uint16_t *d = (uint16_t *) dst + (size_t) y * (size_t) w;
+          for (x = 0; x < w; x++)
+            {
+              uint32_t v = s[x];
+              uint32_t r = rgb ? (v >> 16) & 255 : v & 255, g = (v >> 8) & 255,
+                       b = rgb ? v & 255 : (v >> 16) & 255;
+              d[x] = (uint16_t) (((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3));
+            }
+        }
+      else
+        {
+          uint32_t *d = (uint32_t *) dst + (size_t) y * (size_t) w;
+          if (rgb)
+            for (x = 0; x < w; x++)
+              d[x] = s[x] & 0xffffff;
+          else
+            for (x = 0; x < w; x++)
+              {
+                uint32_t v = s[x];
+                d[x] = ((v & 255) << 16) | (v & 0xff00) | ((v >> 16) & 255);
+              }
+        }
+    }
+  return 0;
+}
+
+int pix_use_neon, pix_use_fast;
+
+void
+pix_convert_best (pix_format f, const unsigned char *src, size_t src_stride,
+                  int w, int h, int client_bpp, void *dst)
+{
+  int thirty2 = f == PIX_32_TBGR || f == PIX_32_TRGB;
+  int to = client_bpp == 16 || client_bpp == 24 || client_bpp == 32;
+  if (pix_use_neon && thirty2 && to && w >= 8 && plat_neon_enter () == 0)
+    {
+      int cb = pix_client_bytes (client_bpp), y, n8 = w & ~7;
+      for (y = 0; y < h; y++)
+        {
+          const unsigned char *s = src + (size_t) y * src_stride;
+          unsigned char *d = (unsigned char *) dst + (size_t) y * (size_t) w * (size_t) cb;
+          plat_neon_convert (f == PIX_32_TRGB, client_bpp == 16 ? 16 : 32, d, s, (unsigned) n8);
+          if (n8 < w)
+            pix_convert_fast (f, s + (size_t) n8 * 4, src_stride, w - n8, 1, client_bpp,
+                              d + (size_t) n8 * (size_t) cb);
+        }
+      plat_neon_leave ();
+      return;
+    }
+  if (pix_use_fast && pix_convert_fast (f, src, src_stride, w, h, client_bpp, dst) == 0)
+    return;
+  pix_convert (f, src, src_stride, w, h, client_bpp, dst);
 }
 
 void

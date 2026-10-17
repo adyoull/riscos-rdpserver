@@ -31,7 +31,7 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from modemu import RiscOS, RMA, SW, SH, Fatal  # noqa: E402
 
-ATTACH, DETACH, SET_FILE, START, STOP, DISCONNECT, RELOAD, STATUS, MESSAGES, SET_MUTE, SET_TLS, SET_SOUND = range(12)
+ATTACH, DETACH, SET_FILE, START, STOP, DISCONNECT, RELOAD, STATUS, MESSAGES, SET_MUTE, SET_TLS, SET_SOUND, SET_VERBOSE = range(13)
 MOD, KEYS, PORT, OUT = sys.argv[1], sys.argv[2], int(sys.argv[3]), sys.argv[4]
 SECONDS = float(sys.argv[5]) if len(sys.argv) > 5 else 600
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -49,6 +49,11 @@ def say(text):
 
 
 m = RiscOS(MOD, base=RMA + 0x2468 * 4)
+m.on_heap_fail = lambda n, rets: say("heap claim of %d refused (stack: %s)" % (n, rets))
+# NEON for reading the screen too (0.2-test30), so every picture checked
+# went through it (the emulator's NEON is slower than its LDM, so it
+# wouldn't be chosen); EMU_SCREENCOPY=2 for LDM 8
+m.vars["RDPServer$ScreenCopy"] = os.environ.get("EMU_SCREENCOPY", "3")
 if os.environ.get("EMU_EGL_OVERLAY"):  # the user's own setting, to be put back
     m.vars["EGL$Overlay"] = os.environ["EMU_EGL_OVERLAY"]
 err = m.init()
@@ -206,6 +211,14 @@ try:
                         say("prereset done in %.0f ms" % ((time.monotonic() - t0) * 1000))
                     elif cmd.startswith("sound "):
                         say("sound: %d" % m.entry(SET_SOUND, int(cmd.split()[1])))
+                    elif cmd.startswith("memfill "):
+                        m.memfill(int(cmd.split()[1]) * 1024)
+                        say("memfill: %s KB left" % cmd.split()[1])
+                    elif cmd == "memunfill":
+                        m.memunfill()
+                        say("memunfill")
+                    elif cmd.startswith("verbose "):
+                        say("verbose: %d" % m.entry(SET_VERBOSE, int(cmd.split()[1])))
                     elif cmd.startswith("mute "):
                         say("mute: %d" % m.entry(SET_MUTE, int(cmd.split()[1])))
                     elif cmd == "status":

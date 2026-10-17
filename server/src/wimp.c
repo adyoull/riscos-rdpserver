@@ -70,7 +70,7 @@ static const char *const detail_label[SD_COUNT] = {
 };
 /* Choices icons. */
 enum { CH_PORT_L, CH_PORT, CH_USER_L, CH_USER, CH_PASS_L, CH_PASS, CH_NOTE,
-       CH_CLEAR, CH_CANCEL, CH_SAVE, CH_MUTE, CH_TLS, CH_SOUND, CH_COUNT };
+       CH_CLEAR, CH_CANCEL, CH_SAVE, CH_MUTE, CH_TLS, CH_SOUND, CH_LOG, CH_COUNT };
 
 typedef struct
 {
@@ -97,6 +97,9 @@ static char port_text[8];
 static int mute_shown;          /* the Choices options' states */
 static int tls_shown;
 static int sound_shown;
+static int log_shown;           /* the detailed log: as shown in Choices, */
+static int log_chosen;          /* as saved, */
+static int log_by_command;      /* and -v on the command line */
 static int shutdown_seen;       /* the last PreQuit was the desktop shutting down */
 static unsigned shutdown_at;    /* when it came: the Quit must follow within
                                    SHUTDOWN_CS, not after a shutdown that was
@@ -257,15 +260,23 @@ wimp_read_sound (const char *file, int def)
   return read_flag (file, "send_sound", def);
 }
 
+/* "detailed_log 0|1": every click, key and network check, and figures
+   every 5 s, in the Log (off unless chosen, 0.2-test26). */
+int
+wimp_read_log (const char *file, int def)
+{
+  return read_flag (file, "detailed_log", def);
+}
+
 int
 wimp_write_settings (const char *file, int port, int mute_local, int require_tls,
-                     int send_sound)
+                     int send_sound, int detailed_log)
 {
   FILE *f = fopen (file, "w");
   if (!f)
     return -1;
-  fprintf (f, "port %d\nmute_local %d\nrequire_tls %d\nsend_sound %d\n", port,
-           mute_local != 0, require_tls != 0, send_sound != 0);
+  fprintf (f, "port %d\nmute_local %d\nrequire_tls %d\nsend_sound %d\ndetailed_log %d\n",
+           port, mute_local != 0, require_tls != 0, send_sound != 0, detailed_log != 0);
   return fclose (f) == 0 ? 0 : -1;
 }
 
@@ -368,17 +379,19 @@ create_choices (void)
     { 16, -180, 240, -132, LABEL, "Password", NULL, 0 },
     { 256, -180, 784, -132, WRITABLE, "", "D*;Ktar", 64 },
     { 16, -236, 784, -188, LABEL, "", NULL, 0 },
-    { 16, -484, 240, -416, BUTTON, "Clear login", "R5,3", 0 },
-    { 400, -484, 576, -416, BUTTON, "Cancel", "R5,3", 0 },
-    { 592, -484, 784, -416, BUTTON, "Save", "R6,3", 0 },
+    { 16, -540, 240, -472, BUTTON, "Clear login", "R5,3", 0 },
+    { 400, -540, 576, -472, BUTTON, "Cancel", "R5,3", 0 },
+    { 592, -540, 784, -472, BUTTON, "Save", "R6,3", 0 },
     { 16, -348, 784, -300, OPTION, "Mute this computer while a client listens",
       "Soptoff,opton", 0 },
     { 16, -404, 784, -356, OPTION, "Only allow TLS connections (refuse RC4)",
       "Soptoff,opton", 0 },
     { 16, -292, 784, -244, OPTION, "Send this computer's sound to the client",
+      "Soptoff,opton", 0 },
+    { 16, -460, 784, -412, OPTION, "Detailed log (for reporting problems)",
       "Soptoff,opton", 0 }
   };
-  return create_window (W_CHOICES, "RDPServer choices", 400, 800, 800, 500,
+  return create_window (W_CHOICES, "RDPServer choices", 400, 800, 800, 556,
                         WF_CLOSE, ic, CH_COUNT);
 }
 
@@ -552,6 +565,12 @@ show_tls (int on)
   show_option (CH_TLS, &tls_shown, on);
 }
 
+static void
+show_log (int on)
+{
+  show_option (CH_LOG, &log_shown, on);
+}
+
 /* Muting this computer only means something while sound goes to the
    client: shaded when it doesn't. */
 static void
@@ -586,6 +605,7 @@ fill_choices (void)
   show_mute (setup->opt->mute_local);
   show_tls (setup->opt->require_tls);
   show_sound (setup->opt->send_sound);
+  show_log (log_chosen);
   if (auth_load (setup->logins_file, &db) == 0 && db.count > 0)
     set_text (W_CHOICES, CH_USER, db.login[0].name);
   else
@@ -688,8 +708,19 @@ save_choices (void)
     }
   forget_password ();
   if (mute_shown != setup->opt->mute_local || tls_shown != setup->opt->require_tls
-      || sound_shown != setup->opt->send_sound)
+      || sound_shown != setup->opt->send_sound || log_shown != log_chosen)
     {
+      if (log_shown != log_chosen)
+        {
+          log_chosen = log_shown;
+          setup->opt->verbose = log_chosen || log_by_command;
+          if (running)
+            server_set_verbose (setup->opt->verbose);
+          else
+            message (log_chosen ? "detailed log on" : "detailed log off");
+          if (!log_chosen && log_by_command)
+            message ("the detailed log stays on: RDPServer was started with -v");
+        }
       if (sound_shown != setup->opt->send_sound)
         {
           setup->opt->send_sound = sound_shown;
@@ -716,7 +747,7 @@ save_choices (void)
         }
       if (p == atoi (port_text) && running
           && wimp_write_settings (setup->settings_file, (int) p, mute_shown, tls_shown,
-                                  sound_shown) != 0)
+                                  sound_shown, log_chosen) != 0)
         wimp_report ("The choice couldn't be saved in Choices: it's used until "
                      "RDPServer quits.");
     }
@@ -724,7 +755,8 @@ save_choices (void)
   if (p != atoi (port_text) || !running)
     {
       if (wimp_write_settings (setup->settings_file, (int) p, setup->opt->mute_local,
-                               setup->opt->require_tls, setup->opt->send_sound) != 0)
+                               setup->opt->require_tls, setup->opt->send_sound,
+                               log_chosen) != 0)
         wimp_report ("The port couldn't be saved in Choices: it's used until "
                      "RDPServer quits.");
       if (running)
@@ -831,6 +863,8 @@ wimp_event (int reason, int *b)
             show_tls (!tls_shown);
           else if (b[4] == CH_SOUND)
             show_sound (!sound_shown);
+          else if (b[4] == CH_LOG)
+            show_log (!log_shown);
         }
       break;
     case Key_Pressed:
@@ -929,6 +963,12 @@ wimp_init (const wimp_setup *w)
   tls_shown = w->opt->require_tls;
   w->opt->send_sound = wimp_read_sound (w->settings_file, 0);
   sound_shown = w->opt->send_sound;
+  /* The detailed log: chosen in Choices, or -v (0.2-test26: !Run no
+     longer passes -v). */
+  log_by_command = w->opt->verbose != 0;
+  log_chosen = wimp_read_log (w->settings_file, 0);
+  log_shown = log_chosen;
+  w->opt->verbose = log_chosen || log_by_command;
   log_out = w->log_file ? fopen (w->log_file, "w") : NULL;
   server_set_message_hook (message);
 

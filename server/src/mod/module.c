@@ -41,7 +41,7 @@ extern volatile int mod_errorbox_open;   /* read by the ByteV veneer */
 
 #define ByteV 6
 #define STACK_BYTES (512 * 1024)
-#define HEAP_MAX (48 * 1024 * 1024)
+#define HEAP_MAX (128 * 1024 * 1024)   /* (48 until 0.2-test31: too little for a 4K screen's login page) */
 #define TICKER_CS 1                       /* OS_CallEvery: every 2 cs */
 #define EXTRA_TURNS 0                     /* see drive(); RDPServer$ExtraTurns */
 
@@ -181,6 +181,7 @@ lost (void)
       }
   }
   rdps_thread_reset ();
+  plat_neon_reset ();              /* thrown away between enter and leave */
   rdps_close_all_sockets ();
   plat_click_finish ();
   m.driving = 0;
@@ -425,6 +426,8 @@ rdps_fatal (const char *why)
 
 /* --- the front end's entries (modapi.h; SVC mode) ------------------------- */
 
+void mod_stop (void);
+
 int
 mod_attach (int task)
 {
@@ -601,6 +604,20 @@ mod_set_sound (int on)
   return r;
 }
 
+/* Choices' "detailed log" (0.2-test26). */
+int
+mod_set_verbose (int on)
+{
+  int r;
+  m.mopt.verbose = on != 0;
+  m.opt.verbose = on != 0;          /* for a restart */
+  if (!take ())
+    return -1;
+  r = rdps_cmd_set_verbose (on);
+  give ();
+  return r;
+}
+
 int
 mod_set_require_tls (int on)
 {
@@ -676,7 +693,10 @@ mod_init (int *private_word)
   m.private_word = private_word;
   *private_word = (int) &m;               /* OS_Module 18 gives this as R4 */
   rdps_ctype_init ();
-  if (rdps_heap_init ("RDPServer", HEAP_MAX) != 0)
+  /* (an older RISC OS may not give 128 MB of address space: 48, as
+     before 0.2-test31) */
+  if (rdps_heap_init ("RDPServer", HEAP_MAX) != 0
+      && rdps_heap_init ("RDPServer", 48 * 1024 * 1024) != 0)
     return &err_nomem;
   m.stack = malloc (STACK_BYTES);
   if (!m.stack || rdps_thread_init (m.stack, STACK_BYTES) != 0)
@@ -732,6 +752,7 @@ mod_final (int fatal)
   remove_handlers ();
   plat_sound_stop ();              /* (the server may not have stopped) */
   plat_click_finish ();
+  plat_neon_stop ();
   rdps_close_all_sockets ();
   plat_set_clients (0);
   rdps_memfs_clear ();

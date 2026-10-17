@@ -1,0 +1,22 @@
+--- a/libxrdp/xrdp_caps.c	2026-10-17 10:25:10.749169496 +0100
++++ b/libxrdp/xrdp_caps.c	2026-10-17 10:25:10.777177797 +0100
+@@ -679,6 +679,19 @@
+         return 1;
+     }
+     in_uint32_le(s, MaxRequestSize);
++    /* RDPServer: a buffer this size is claimed for every fast-path PDU
++       sent (xrdp_fastpath_init), and the client chooses it: about 1.3 MB
++       from FreeRDP, more from Windows 11, where a claim that failed in
++       RISC OS's smaller memory left a null buffer written to. What the
++       server sends is far smaller (16 KB bitmaps, 32 KB orders), and
++       PDUs smaller than the client's most are allowed: 128 KB, still
++       enough for 96x96 pointers. */
++    if (MaxRequestSize > 128 * 1024)
++    {
++        LOG(LOG_LEVEL_INFO, "The client takes fast-path PDUs of up to %d bytes: "
++            "128 KB used", MaxRequestSize);
++        MaxRequestSize = 128 * 1024;
++    }
+     if (self->client_info.use_fast_path & 1)
+     {
+         self->client_info.max_fastpath_frag_bytes = MaxRequestSize;

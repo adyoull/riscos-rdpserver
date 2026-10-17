@@ -87,13 +87,62 @@ ms16 (void)
   return (plat_time_cs () * 10) & 0xffff;
 }
 
+int
+sound_step_for (unsigned rate_hz)
+{
+  int step = 1;
+  while (step < 4 && rate_hz / (unsigned) (step * 2) >= 22050)
+    step *= 2;
+  return step;
+}
+
+int
+sound_decimate (unsigned char *buf, int bytes, int step)
+{
+  int frames = bytes / 4 / step, i, j;
+  if (step <= 1)
+    return bytes;
+  for (i = 0; i < frames; i++)
+    {
+      int l = 0, r = 0;
+      for (j = 0; j < step; j++)
+        {
+          const unsigned char *f = buf + (i * step + j) * 4;
+          l += (short) (f[0] | f[1] << 8);
+          r += (short) (f[2] | f[3] << 8);
+        }
+      l /= step;
+      r /= step;
+      buf[i * 4] = (unsigned char) l;
+      buf[i * 4 + 1] = (unsigned char) (l >> 8);
+      buf[i * 4 + 2] = (unsigned char) r;
+      buf[i * 4 + 3] = (unsigned char) (r >> 8);
+    }
+  return frames * 4;
+}
+
+/* One format of the Server Audio Formats PDU: PCM, 2 channels, 16 bits */
+static unsigned char *
+put_pcm (unsigned char *p, unsigned rate)
+{
+  put16 (p, 1);                 /* WAVE_FORMAT_PCM */
+  put16 (p + 2, 2);             /* nChannels */
+  put32 (p + 4, rate);          /* nSamplesPerSec */
+  put32 (p + 8, rate * 4);      /* nAvgBytesPerSec */
+  put16 (p + 12, 4);            /* nBlockAlign */
+  put16 (p + 14, 16);           /* wBitsPerSample */
+  put16 (p + 16, 0);            /* cbSize */
+  return p + 18;
+}
+
 void
 sound_start (rdps_sound *snd, struct xrdp_session *session, int mute_local,
-             int verbose, void (*say) (const char *fmt, ...))
+             int verbose, int full_rate, void (*say) (const char *fmt, ...))
 {
-  unsigned char pdu[4 + 20 + 18];
+  unsigned char pdu[4 + 20 + 2 * 18];
   unsigned char *p;
   unsigned rate;
+  int nformats;
 
   /* up again after a resize (deactivation-reactivation): the channel
      carries on as it was */
@@ -115,28 +164,28 @@ sound_start (rdps_sound *snd, struct xrdp_session *session, int mute_local,
       return;
     }
   snd->rate = rate;
-  /* Server Audio Formats and Version PDU, one format: PCM, 2 channels,
-     16 bits, at the sound system's rate */
+  snd->full_rate = full_rate;
+  snd->step = full_rate ? 1 : sound_step_for (rate);
+  snd->out_rate = rate / (unsigned) snd->step;
+  nformats = snd->step > 1 ? 2 : 1;
+  /* Server Audio Formats and Version PDU: PCM, 2 channels, 16 bits, at
+     the rate we'd rather send, then at the sound system's own */
   p = pdu;
-  header (p, SNDC_FORMATS, (int) sizeof pdu - 4);
+  header (p, SNDC_FORMATS, 20 + nformats * 18);
   p += 4;
   put32 (p, 0);                 /* dwFlags */
   put32 (p + 4, 0);             /* dwVolume */
   put32 (p + 8, 0);             /* dwPitch */
   put16 (p + 12, 0);            /* wDGramPort */
-  put16 (p + 14, 1);            /* wNumberOfFormats */
+  put16 (p + 14, (unsigned) nformats); /* wNumberOfFormats */
   p[16] = 0;                    /* cLastBlockConfirmed */
   put16 (p + 17, 6);            /* wVersion */
   p[19] = 0;                    /* bPad */
   p += 20;
-  put16 (p, 1);                 /* WAVE_FORMAT_PCM */
-  put16 (p + 2, 2);             /* nChannels */
-  put32 (p + 4, rate);          /* nSamplesPerSec */
-  put32 (p + 8, rate * 4);      /* nAvgBytesPerSec */
-  put16 (p + 12, 4);            /* nBlockAlign */
-  put16 (p + 14, 16);           /* wBitsPerSample */
-  put16 (p + 16, 0);            /* cbSize */
-  if (send_pdu (snd, pdu, (int) sizeof pdu) == 0)
+  p = put_pcm (p, snd->out_rate);
+  if (nformats > 1)
+    p = put_pcm (p, rate);
+  if (send_pdu (snd, pdu, (int) (p - pdu)) == 0)
     snd->stage = 1;
 }
 
@@ -165,17 +214,30 @@ client_formats (rdps_sound *snd, const unsigned char *b, int len)
   snd->client_version = (int) get16 (b + 17);
   f = b + 20;
   snd->client_format = -1;
-  for (i = 0; i < n; i++)
-    {
-      unsigned cb;
-      if (f + 18 > b + len)
-        break;
-      cb = get16 (f + 16);
-      if (get16 (f) == 1 && get16 (f + 2) == 2 && get32 (f + 4) == snd->rate
-          && get16 (f + 14) == 16 && snd->client_format < 0)
-        snd->client_format = (int) i;
-      f += 18 + cb;
-    }
+  {
+    int full_at = -1;           /* the full rate, if the client won't take ours */
+    for (i = 0; i < n; i++)
+      {
+        unsigned cb;
+        if (f + 18 > b + len)
+          break;
+        cb = get16 (f + 16);
+        if (get16 (f) == 1 && get16 (f + 2) == 2 && get16 (f + 14) == 16)
+          {
+            if (get32 (f + 4) == snd->out_rate && snd->client_format < 0)
+              snd->client_format = (int) i;
+            else if (get32 (f + 4) == snd->rate && full_at < 0)
+              full_at = (int) i;
+          }
+        f += 18 + cb;
+      }
+    if (snd->client_format < 0 && full_at >= 0)
+      {
+        snd->client_format = full_at;
+        snd->step = 1;
+        snd->out_rate = snd->rate;
+      }
+  }
   if (!(flags & TSSNDCAPS_ALIVE))
     {
       /* rdesktop without -r sound, say: an ordinary choice */
@@ -186,7 +248,11 @@ client_formats (rdps_sound *snd, const unsigned char *b, int len)
     }
   if (snd->client_format < 0)
     {
-      snd->say ("sound: the client won't play %u Hz 16-bit stereo PCM", snd->rate);
+      if (snd->out_rate != snd->rate)
+        snd->say ("sound: the client won't play %u or %u Hz 16-bit stereo PCM",
+                  snd->out_rate, snd->rate);
+      else
+        snd->say ("sound: the client won't play %u Hz 16-bit stereo PCM", snd->rate);
       snd->stage = 0;
       return;
     }
@@ -207,9 +273,15 @@ client_formats (rdps_sound *snd, const unsigned char *b, int len)
         return;
       }
   }
-  snd->say ("sound: to the client, %u Hz 16-bit stereo (its format %d, version %d)%s",
-            snd->rate, snd->client_format, snd->client_version,
-            snd->mute_local ? "; this computer muted meanwhile" : "");
+  if (snd->step > 1)
+    snd->say ("sound: to the client, %u Hz 16-bit stereo (from %u Hz; its format %d, "
+              "version %d)%s", snd->out_rate, snd->rate, snd->client_format,
+              snd->client_version, snd->mute_local ? "; this computer muted meanwhile" : "");
+  else
+    snd->say ("sound: to the client, %u Hz 16-bit stereo (its format %d, version %d)%s%s",
+              snd->rate, snd->client_format, snd->client_version,
+              snd->full_rate ? "; RDPServer$SoundRate 0: the full rate" : "",
+              snd->mute_local ? "; this computer muted meanwhile" : "");
   send_training (snd);
 }
 
@@ -323,7 +395,8 @@ sound_step (rdps_sound *snd)
 {
   static unsigned char pdu[16 + MAX_BLOCK];
   int any = 0, blocks;
-  int block = (int) (snd->rate * 4 * BLOCK_MS / 1000) & ~3;
+  int step = snd->step > 0 ? snd->step : 1;
+  int block = (int) (snd->rate * 4 * BLOCK_MS / 1000) & ~(4 * step - 1);
   if (snd->stage != 3 || block <= 4 || block > MAX_BLOCK)
     return 0;
   if (!snd->told && (int) (plat_time_cs () - snd->playing_cs) >= 500)
@@ -375,6 +448,7 @@ sound_step (rdps_sound *snd)
           snd->silent_skipped++;
           continue;
         }
+      n = sound_decimate (data, n, step);
       /* WaveInfo PDU: header, wTimeStamp, wFormatNo, cBlockNo, bPad[3],
          Data[4] (the sound's first 4 bytes); its BodySize counts the
          whole sound. Then the Wave PDU: bPad[4], the rest of the sound. */
