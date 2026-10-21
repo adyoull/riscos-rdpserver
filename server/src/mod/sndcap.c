@@ -10,9 +10,9 @@
    SharedSound the linear handler meanwhile (it installs itself when it has
    a client), so it doesn't take over from the stub later.
 
-   (0.2-test11 and 12 copied the sound in a SharedSound process handler,
-   which only sees what SharedSound's callback handlers make: players that
-   use immediate handlers never reached it, so Windows App heard nothing.)
+   (Not a SharedSound process handler for the copying: that only sees what
+   SharedSound's callback handlers make, so players that use immediate
+   handlers would never reach the client.)
 
    Copyright (c) 2026 Andrew Youll. MIT licence (see LICENSE). */
 #include <stdint.h>

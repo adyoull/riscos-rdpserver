@@ -1,5 +1,33 @@
 # Changelog
 
+## RDPServer 0.2 (21 October 2026)
+
+The release: 0.2-rc3 with one fix and the code reorganised to be
+easier to work on.
+
+Fixed
+- If !RDPServer quit (or the desktop closed it) while the module thought
+  a turn of the server was still in progress, for example just after a
+  program was stopped in the middle of one, the module didn't notice the
+  front end had gone and could start the server again behind its back.
+  It now stops at its next turn instead.
+
+Removed
+- `RDPServer$ThreadMode` and `RDPServer$ExtraTurns`, which were only for
+  comparing with earlier versions.
+
+Other
+- README: screenshots of the login screen, Choices and Status windows.
+- Code: the server (server.c, 2,700 lines) is split by job into
+  srv_input.c, srv_session.c, srv_restart.c, srv_updates.c,
+  srv_measure.c, srv_keepalive.c and srv_status.c, with srv.h for what
+  they share, and a server turn is a sequence of named steps; the
+  `RDPServer$` variables for trying other settings are listed in one
+  place (tuning.c); the module's memory functions are in heap.c.
+- Tests: the end-to-end tests of a client that stops reading no longer
+  fail now and then (Linux may let the frozen client's receive buffer
+  grow to 32 MB; the takeover check has a server of its own).
+
 ## RDPServer 0.2-rc3 (17 October 2026)
 
 Reliability

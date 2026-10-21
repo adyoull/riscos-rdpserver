@@ -12,7 +12,7 @@ include $(RCD_DIR)/riscos.mk
 .DEFAULT_GOAL := all
 
 VERSION := 0.2
-TESTSUFFIX := -rc3
+TESTSUFFIX :=
 B := build
 X := $(B)/xrdp
 XRDP_H = $(wildcard $(X)/common/*.h $(X)/libxrdp/*.h)
@@ -22,7 +22,7 @@ MO := $(B)/module
 XRDP_SRC := $(wildcard $(X)/libxrdp/*.c) \
   $(addprefix $(X)/common/,parse.c list.c list16.c log.c trans.c string_calls.c \
                             file.c fifo.c pixman-region16.c base64.c guid.c)
-OUR_SRC := src/server.c src/xrdp_peek.c src/srvthread.c src/input.c src/auth.c src/capture.c src/pointer.c src/login.c src/font8x8.c src/kbdlayout.c src/pixels.c src/keymap.c src/sound.c src/encspeed.c \
+OUR_SRC := src/server.c src/srv_input.c src/srv_session.c src/srv_restart.c src/srv_updates.c src/srv_measure.c src/srv_keepalive.c src/srv_status.c src/tuning.c src/xrdp_peek.c src/srvthread.c src/input.c src/auth.c src/capture.c src/pointer.c src/login.c src/font8x8.c src/kbdlayout.c src/pixels.c src/keymap.c src/sound.c src/encspeed.c \
            src/keygen.c src/os_calls.c src/ssl_calls.c src/main.c src/coro_ucontext.c
 MBED_SRC := $(filter-out %/entropy_poll.c %/net_sockets.c %/timing.c,$(wildcard $(M)/library/*.c))
 
@@ -65,7 +65,7 @@ $(RO)/rdpserver: $(RO_OBJ) $(RO)/libmbedcrypto.a | riscos-toolchain-present
 
 checks: $(RO)/rdpserver
 	$(CHECK_ALL) $(RO)/rdpserver
-	$(CHECK_UNALIGNED) -s tools/unaligned-safe.txt $(INC) $(APP_SRC) $(addprefix src/,$(MOD_OUR)) src/mod/module.c src/mod/libc.c src/mod/fmt.c src/mod/sndcap.c
+	$(CHECK_UNALIGNED) -s tools/unaligned-safe.txt $(INC) $(APP_SRC) $(addprefix src/,$(MOD_OUR)) src/mod/module.c src/mod/libc.c src/mod/heap.c src/mod/fmt.c src/mod/sndcap.c
 
 APP_FILES := !Run,feb !Boot,feb !Help,fff xrdp.ini
 ICONS := app/icons/rdpserver.png app/icons/sm-rdpserver.png app/icons/rdpserver-on.png
@@ -97,10 +97,10 @@ MOD_CFLAGS := -O2 -march=armv7-a -mfloat-abi=soft -mno-unaligned-access -fno-pic
   -mword-relocations -fstack-clash-protection -ffunction-sections -fdata-sections \
   -fno-common -fno-unwind-tables -fno-asynchronous-unwind-tables -DRDPS_MODULE \
   -ffile-prefix-map=$(CURDIR)=rdpserver $(INC)
-MOD_OUR := server.c xrdp_peek.c srvthread.c input.c auth.c capture.c pointer.c login.c font8x8.c kbdlayout.c pixels.c keymap.c sound.c encspeed.c os_calls.c \
+MOD_OUR := server.c srv_input.c srv_session.c srv_restart.c srv_updates.c srv_measure.c srv_keepalive.c srv_status.c tuning.c xrdp_peek.c srvthread.c input.c auth.c capture.c pointer.c login.c font8x8.c kbdlayout.c pixels.c keymap.c sound.c encspeed.c os_calls.c \
            ssl_calls.c plat_riscos.c
 MOD_OBJ := $(patsubst %.c,$(MO)/%.o,$(notdir $(XRDP_SRC) $(MOD_OUR))) \
-           $(MO)/module.o $(MO)/libc.o $(MO)/fmt.o $(MO)/header.o $(MO)/coro_arm.o $(MO)/clickup.o $(MO)/scrcopy.o \
+           $(MO)/module.o $(MO)/libc.o $(MO)/heap.o $(MO)/fmt.o $(MO)/header.o $(MO)/coro_arm.o $(MO)/clickup.o $(MO)/scrcopy.o \
            $(MO)/sndcap.o $(MO)/vfpctx.o $(MO)/neon.o
 MOD_MBED := $(patsubst %.c,$(MO)/mbed/%.o,$(notdir $(MBED_SRC)))
 LIBGCC = $(shell $(RO_CC) -print-libgcc-file-name)
@@ -114,7 +114,7 @@ $(MO)/%.o: $(X)/common/%.c $(XRDP_H) | $(MO)
 	$(RO_CC) $(MOD_CFLAGS) $(XRDP_FLAGS) -c $< -o $@
 $(MO)/%.o: src/%.c src/*.h src/mod/*.h $(XRDP_H) | $(MO)
 	$(RO_CC) $(MOD_CFLAGS) -Wall -Wextra -c $< -o $@
-$(MO)/libc.o: src/mod/libc.c src/mod/*.h | $(MO)
+$(MO)/libc.o $(MO)/heap.o: $(MO)/%.o: src/mod/%.c src/mod/*.h | $(MO)
 	$(RO_CC) $(MOD_CFLAGS) -fno-builtin -fno-tree-loop-distribute-patterns -Wall -Wextra -c $< -o $@
 $(MO)/%.o: src/mod/%.c src/mod/*.h src/*.h | $(MO)
 	$(RO_CC) $(MOD_CFLAGS) -fno-tree-loop-distribute-patterns -Wall -Wextra -c $< -o $@

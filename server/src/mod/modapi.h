@@ -27,7 +27,7 @@ enum
   RDPS_MOD_DETACH,        /* void (int keep): stops the server too, unless
                              keep: then it carries on without a front end
                              (the desktop is shutting down: a client can
-                             still use it, to click Restart; 0.2-test23) */
+                             still use it, to click Restart) */
   RDPS_MOD_SET_FILE,      /* int (const char *path, const char *data, int len):
                              a file libxrdp reads, held in memory; data NULL
                              forgets it */
@@ -42,14 +42,13 @@ enum
                              the server's, x: libxrdp's log); returns the
                              bytes written, updates *seq */
   RDPS_MOD_SET_MUTE,      /* int (int on): mute this computer while a client
-                             listens, from now (0.2-test11) */
+                             listens, from now */
   RDPS_MOD_SET_REQUIRE_TLS, /* int (int on): refuse clients that don't use
-                             TLS, from the next one (0.2-test14) */
+                             TLS, from the next one */
   RDPS_MOD_SET_SOUND,     /* int (int on): send this computer's sound to the
                              client; off stops it now, on is from the next
-                             client (0.2-test22) */
-  RDPS_MOD_SET_VERBOSE,   /* int (int on): the detailed log, from now
-                             (0.2-test26) */
+                             client */
+  RDPS_MOD_SET_VERBOSE,   /* int (int on): the detailed log, from now */
   RDPS_MOD_ENTRIES
 };
 /* The same as a number, for the front end's interface tag (modclient.c) */

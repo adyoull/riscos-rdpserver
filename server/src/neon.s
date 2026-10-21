@@ -1,5 +1,5 @@
 @ RDPServer: NEON versions of the pixel work (the module only; measured
-@ against the plain ARM ways at start-up, 0.2-test28).
+@ against the plain ARM ways at start-up).
 @
 @ The NEON registers belong to whichever program has a VFP context
 @ active: these may only be called between plat_neon_enter and

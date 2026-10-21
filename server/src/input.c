@@ -165,8 +165,8 @@ inq_run (inq *q, unsigned now, const inq_sink *s)
       inq_event *e = slot (q, 0);
       if (e->kind == EV_KEY)
         {
-          /* plain: buttons as keys, down and up as they come (as before
-             0.2-test4); otherwise a button-down waits for its up and goes
+          /* plain: buttons as keys, down and up as they come;
+             otherwise a button-down waits for its up and goes
              as one click */
           int button_down = is_button (e->a) && e->b;
           int press = button_down && !q->plain;

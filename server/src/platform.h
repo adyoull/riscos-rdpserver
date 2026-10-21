@@ -113,7 +113,7 @@ void plat_sound_stats (plat_sound_info *i);
 int plat_sound_ok (void);
 void plat_sound_stop (void);
 
-/* Memory (the module's heap, src/mod/libc.c; 0.2-test31). A session
+/* Memory (the module's heap, src/mod/heap.c). A session
    keeps a block back (plat_memory_reserve), given up when a claim fails so
    that libxrdp, which doesn't check, still gets its small claims;
    plat_memory_short then says so once (and clears). plat_memory_info: the
@@ -123,11 +123,11 @@ int plat_memory_reserve (unsigned bytes);
 int plat_memory_short (void);
 void plat_memory_info (unsigned *used_kb, unsigned *max_kb, int *refused);
 
-/* NEON (the module on RISC OS 5, src/mod/vfpctx.c; 0.2-test28: only
-   measured, at start-up). The NEON registers belong to whichever program
-   has a VFP context active, so the module makes its own (VFPSupport) and
-   switches to it around any NEON work, lazily: plat_neon_enter, then
-   plat_neon_leave. plat_neon_start makes it, once: 1 if NEON can be used.
+/* NEON (the module on RISC OS 5, src/mod/vfpctx.c). The NEON registers
+   belong to whichever program has a VFP context active, so the module
+   makes its own (VFPSupport) and switches to it around any NEON work,
+   lazily: plat_neon_enter, then plat_neon_leave. plat_neon_start makes
+   it, once: 1 if NEON can be used.
    plat_neon_reset after the server thread was thrown away (switch back
    if it was left entered); plat_neon_stop at the end. Linux: none. */
 int plat_neon_start (void);

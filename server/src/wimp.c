@@ -253,7 +253,7 @@ wimp_read_tls (const char *file, int def)
 }
 
 /* "send_sound 0|1": send this computer's sound to the client (off unless
-   chosen, 0.2-test22). */
+   chosen). */
 int
 wimp_read_sound (const char *file, int def)
 {
@@ -261,7 +261,7 @@ wimp_read_sound (const char *file, int def)
 }
 
 /* "detailed_log 0|1": every click, key and network check, and figures
-   every 5 s, in the Log (off unless chosen, 0.2-test26). */
+   every 5 s, in the Log (off unless chosen). */
 int
 wimp_read_log (const char *file, int def)
 {
@@ -963,8 +963,7 @@ wimp_init (const wimp_setup *w)
   tls_shown = w->opt->require_tls;
   w->opt->send_sound = wimp_read_sound (w->settings_file, 0);
   sound_shown = w->opt->send_sound;
-  /* The detailed log: chosen in Choices, or -v (0.2-test26: !Run no
-     longer passes -v). */
+  /* The detailed log: chosen in Choices, or -v (!Run doesn't pass -v). */
   log_by_command = w->opt->verbose != 0;
   log_chosen = wimp_read_log (w->settings_file, 0);
   log_shown = log_chosen;

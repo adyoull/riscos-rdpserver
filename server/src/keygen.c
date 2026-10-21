@@ -155,7 +155,7 @@ rdps_keygen (const char *file)
   return fclose (f) != 0;
 }
 
-/* --- the TLS certificate (0.2-test14) -------------------------------------------
+/* --- the TLS certificate -------------------------------------------
    TLS needs the key as a PEM file and an X.509 certificate for it. Both
    are made from the key in rsakeys.ini (so no second key, and no second
    minute's wait, on machines that already have one): the private

@@ -299,8 +299,8 @@ plat_alphabet (void)
   return a && *a ? atoi (a) : 101;
 }
 
-/* RDPS_HOST_STUCK_SHIFT pretends RISC OS thinks Shift is held (as the
-   Pi did with test2) until a Shift key is released. */
+/* RDPS_HOST_STUCK_SHIFT pretends RISC OS thinks Shift is held (as a
+   Pi did once) until a Shift key is released. */
 static int shift_down = -1;
 
 void

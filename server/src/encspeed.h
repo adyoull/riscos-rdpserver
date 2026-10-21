@@ -11,7 +11,7 @@ typedef struct
   unsigned convert_tps, compress_tps, mppc_tps;   /* 64x64 tiles a second */
   unsigned rle_kb, mppc_kb;     /* a whole screen of tiles like these */
   unsigned screen_tiles, tiles; /* in a whole screen; measured */
-  /* converting another way (0.2-test28, measured only; 0: not measured):
+  /* converting another way (0: not measured):
      a simpler loop (pix_convert_fast), and NEON (plat_neon_convert) */
   unsigned fast_tps, neon_tps;
   int fast_same, neon_same;     /* made the same pixels as pix_convert */

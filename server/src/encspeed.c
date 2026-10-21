@@ -183,7 +183,7 @@ rdps_encode_speed (const rdps_screen *scr, pix_format fmt, int cbpp, unsigned cs
     do_mppc (&c, i);
   c.count_bytes = 0;
   r->convert_tps = rate (do_convert, &c, ntiles, cs);
-  /* the other ways (measured only, 0.2-test28): 32 bpp screens to 32 or
+  /* the other ways (measured only): 32 bpp screens to 32 or
      16 bpp; NEON between plat_neon_enter and plat_neon_leave, the turn
      running on without a yield */
   if ((fmt == PIX_32_TBGR || fmt == PIX_32_TRGB) && (cbpp == 32 || cbpp == 16))

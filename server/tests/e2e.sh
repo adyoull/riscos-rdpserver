@@ -429,11 +429,12 @@ stop_clients $FPID $EPID
 kill -INT $KPID 2>/dev/null; wait $KPID 2>/dev/null
 
 # A client that stops reading with its connection open (a RISC OS client
-# whose program stopped, 0.2-rc1: the server waited for half an hour):
+# whose program stopped: the server waited for half an hour):
 # a fifth server, a 1920 x 1080 screen of fresh noise every second,
 # -stall 600. A frozen rdesktop (no network checks) is dropped once
-# nothing has gone to it for 6 s; and a new connection takes the place of
-# another frozen one at once (the whole screen sent, none of it taken).
+# nothing has gone to it for 6 s; and (below) a new connection takes the
+# place of another frozen one at once (the whole screen sent, none of it
+# taken).
 SLOG="$OUT/server-stall.log"
 env -u RDPS_HOST_STILL RDPS_HOST_SIZE=1920x1080 RDPS_HOST_NOISE=1 \
   $SRV -p $((PORT + 6)) -t 150 -g 2 -v -stall 600 >"$SLOG" 2>&1 & LPID=$!
@@ -443,26 +444,37 @@ sgones () { grep -c "client gone" "$SLOG"; }
 $RDESKTOP -u test -p x -a 32 -N localhost:$((PORT + 6)) >"$OUT/stall-a.log" 2>&1 & SAPID=$!
 wait_for sups 1 30
 sleep 3; kill -STOP $SAPID
-wait_for sgones 1 40
+# Linux may let the frozen client's receive buffer grow to 32 MB
+# (tcp_rmem), taking the noise for most of a minute before it's full
+wait_for sgones 1 100
 grep -q "client gone (the client stopped taking data" "$SLOG" \
   && ok "a client that stops reading is dropped" || bad "stalled client: $(grep 'client gone' "$SLOG" | tail -1)"
 stop_clients $SAPID
-$RDESKTOP -u test -p x -a 32 -N localhost:$((PORT + 6)) >"$OUT/stall-b.log" 2>&1 & SBPID=$!
-wait_for sups 2 30
+grep -q "send buffer: 64 KB" "$SLOG" && ok "a 64 KB send buffer (not 256: the stack's mbufs)" || bad "send buffer: $(grep 'send buffer' "$SLOG" | tail -1)"
+kill -INT $LPID 2>/dev/null; wait $LPID 2>/dev/null
+# The takeover on a server of its own with -stall 3000: with 6 s, the
+# frozen client was sometimes dropped for not taking data before the new
+# connection's 5 s check of it had finished, and the takeover never came.
+TLOG="$OUT/server-takeover.log"
+env -u RDPS_HOST_STILL RDPS_HOST_SIZE=1920x1080 RDPS_HOST_NOISE=1 \
+  $SRV -p $((PORT + 10)) -t 150 -g 2 -v -stall 3000 >"$TLOG" 2>&1 & LPID=$!
+for i in $(seq 1 30); do grep -q listening "$TLOG" && break; sleep 1; done
+tups () { grep -c "client up" "$TLOG"; }
+$RDESKTOP -u test -p x -a 32 -N localhost:$((PORT + 10)) >"$OUT/stall-b.log" 2>&1 & SBPID=$!
+wait_for tups 1 30
 kill -STOP $SBPID
-$RDESKTOP -u test -p x -a 32 -N localhost:$((PORT + 6)) >"$OUT/stall-c.log" 2>&1 & SCPID=$!
-wait_for sups 3 30
+$RDESKTOP -u test -p x -a 32 -N localhost:$((PORT + 10)) >"$OUT/stall-c.log" 2>&1 & SCPID=$!
+wait_for tups 2 60
 # (Not under QEMU: the emulated server makes the whole screen so slowly
 # that the frozen client's socket buffers here, megabytes on Linux, keep
 # taking it for longer than the check lasts; on RISC OS they're 64 KB.)
 if [ "${QEMU:-0}" = 1 ]; then
   echo "skip a new connection takes the place of a client that stopped reading (QEMU: too slow to fill Linux's buffers)"
 else
-  grep -q "client gone (a new connection came, and this client wasn't taking what was sent to it)" "$SLOG" \
-    && [ "$(sups)" -eq 3 ] && ok "a new connection takes the place of a client that stopped reading" \
-    || bad "stalled takeover: $(grep -i 'waiting\|client gone\|refused' "$SLOG" | tail -3 | tr '\n' ' ')"
+  grep -q "client gone (a new connection came, and this client wasn't taking what was sent to it)" "$TLOG" \
+    && [ "$(tups)" -eq 2 ] && ok "a new connection takes the place of a client that stopped reading" \
+    || bad "stalled takeover: $(grep -i 'waiting\|client gone\|refused' "$TLOG" | tail -3 | tr '\n' ' ')"
 fi
-grep -q "send buffer: 64 KB" "$SLOG" && ok "a 64 KB send buffer (not 256: the stack's mbufs)" || bad "send buffer: $(grep 'send buffer' "$SLOG" | tail -1)"
 stop_clients $SBPID $SCPID
 kill -INT $LPID 2>/dev/null; wait $LPID 2>/dev/null
 

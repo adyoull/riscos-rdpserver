@@ -1,5 +1,4 @@
-/* RDPServer: the module's own VFP context, for NEON (platform.h,
-   0.2-test28).
+/* RDPServer: the module's own VFP context, for NEON (platform.h).
 
    VFPSupport (PRM p700-709) keeps one context active at a time, the
    VFP/NEON registers of whichever program is using them. The module makes
@@ -8,12 +7,12 @@
    only around NEON work: there lazily (nothing is saved unless NEON is
    actually used), and back at once, so that the program it interrupted
    has its own registers loaded again and the module's context is never
-   the loaded one when it's destroyed. (0.2-test28 switched back lazily
-   too: killing the module then destroyed its context while it was still
-   loaded, and VFPSupport put the null context in place of the program's,
-   whose next VFP instruction faulted: !RDPServer's Quit.) NEON is used only if VFPSupport_Features 0 says the
-   Advanced SIMD integer and load/store instructions are there (MVFR1
-   bits 8-15).
+   the loaded one when it's destroyed. (Switching back lazily too, killing
+   the module would destroy its context while still loaded: VFPSupport
+   would put the null context in place of the program's, whose next VFP
+   instruction would fault.) NEON is used only if VFPSupport_Features 0
+   says the Advanced SIMD integer and load/store instructions are there
+   (MVFR1 bits 8-15).
 
    Copyright (c) 2026 Andrew Youll. MIT licence (see LICENSE). */
 #include <stddef.h>

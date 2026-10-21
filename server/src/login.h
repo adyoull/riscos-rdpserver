@@ -41,7 +41,7 @@ void login_close (login_ui *l);
 
 /* A notice in the login page's place, with no fields or button: a title
    and a line under it, on the same background and panel (the computer
-   restarting, 0.2-test24). -1 if there's no memory. */
+   restarting). -1 if there's no memory. */
 int login_notice (login_ui *l, int w, int h, const char *title, const char *line);
 /* A line under the fields ("" for none). */
 void login_message (login_ui *l, const char *text);

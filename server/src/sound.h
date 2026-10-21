@@ -3,7 +3,7 @@
 
    The server offers PCM 16-bit stereo at half the rate the sound system
    plays at, while that's still 22 kHz or more (44.1 kHz goes as 22.05,
-   48 as 24: half the bytes, 0.2-test27), and at the full rate in case
+   48 as 24: half the bytes), and at the full rate in case
    the client won't take that (plat_sound_*); the client answers with the
    formats it takes, a training PDU goes there and back, then the sound goes as
    WaveInfo + Wave PDU pairs (version 6: every client takes them), the

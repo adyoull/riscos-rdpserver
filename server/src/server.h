@@ -76,9 +76,9 @@ void server_set_require_tls (int on);
 void server_set_sound (int on);
 void server_set_verbose (int on);
 /* RISC OS is about to reset: tell the client (a page in the screen's
-   place), and say when that has gone (0.2-test24). */
+   place), and say when that has gone. */
 void server_restarting (void);
-/* Service_ShutdownComplete: the desktop has shut down (0.2-test25). */
+/* Service_ShutdownComplete: the desktop has shut down. */
 void server_shutdown_complete (void);
 int server_restart_done (void);
 void server_get_status (server_status *st);

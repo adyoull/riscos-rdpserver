@@ -30,9 +30,6 @@ int rdps_thread_due (unsigned now);
    from inside it (a nested callback). */
 void rdps_thread_run (void);
 
-/* When the thread next wants to run (monotonic cs). */
-unsigned rdps_thread_wake_time (void);
-
 /* Commands, from outside the thread. o is copied by the caller's
    front end layer; it must stay valid while the server runs. */
 int rdps_cmd_start (const server_options *o);   /* 0, or 1: see the messages */

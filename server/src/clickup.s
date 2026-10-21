@@ -7,10 +7,10 @@
 @ then, so the button-up is done by this routine, copied to the RMA (it
 @ runs whichever task is paged in: RISCOS-RULES section 5).
 @
-@ test5 had the ticker add a transient callback that did the KeyV call.
-@ On the Pi, a click on some title bars then left the button down: the
-@ loop waiting for it to go up runs in SVC mode, and callbacks only run on
-@ a return to user mode. So KeyV is called from the ticker event itself,
+@ Not from a transient callback added by the ticker: on the Pi, a click
+@ on some title bars then left the button down, because the loop waiting
+@ for it to go up runs in SVC mode, and callbacks only run on a return to
+@ user mode. So KeyV is called from the ticker event itself,
 @ as keyboard and mouse drivers call it from their interrupt handlers.
 @
 @ rdps_clickup_ticker: given to OS_CallAfter (PRM p289: SVC mode,

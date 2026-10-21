@@ -1,18 +1,17 @@
 @ RDPServer: coro.h for RISC OS (the module). One coroutine, the server
-@ thread, which runs in USR mode on its own stack (SYS mode if
-@ co_thread_mode says so, for comparing).
+@ thread, which runs in USR mode on its own stack.
 @
 @ Why not SVC mode: the module resumes the thread from SVC mode (its
 @ callback, its ByteV claimant, the front end's entries). In SVC mode with
 @ sp off the SVC stack, a SWI or an interrupt handled by a C module
 @ crashes it: C modules find their static data from the base of the SVC
-@ stack (sp rounded down to the megabyte). 0.2-test1 did that and aborted
-@ inside Internet (+&4A8) on the Pi. In USR (or SYS) mode the thread's
+@ stack (sp rounded down to the megabyte). That aborted inside Internet
+@ (+&4A8) on the Pi. In USR mode the thread's
 @ SWIs and interrupts use the SVC stack, as any program's do.
 @
 @ Why USR, not SYS: on every return to USR mode the kernel runs transient
 @ callbacks, and the Internet module does its TCP work in them (taking
-@ in ACKs, sending what's queued). In SYS mode (0.2-test6 to test8) they
+@ in ACKs, sending what's queued). In SYS mode they
 @ waited until the server's turn ended, so a big picture went out at
 @ about one TCP round trip per 2 cs: the first desktop took 10 s to
 @ arrive, against "instantly" in USR mode (owner, 14 Oct 2026).
@@ -26,7 +25,7 @@
 @
 @ co_resume (SVC mode): saves the SVC context, its CPSR, and the user
 @   registers sp and lr of whatever task is current (they must be put
-@   back), then goes to USR (or SYS) mode, interrupts on, on the thread's
+@   back), then goes to USR mode, interrupts on, on the thread's
 @   stack.
 @ co_yield (in the thread): saves the thread's context, back to SVC mode
 @   (OS_EnterOS from USR mode) as co_resume was (CPSR), puts the user sp
@@ -46,7 +45,6 @@
         .global co_yield
         .global co_inside
         .global co_reset
-        .global co_thread_mode
 
         .equ    XOS_EnterOS, 0x20016
 
@@ -65,10 +63,6 @@
         .balign 4
 co_state:
         .space  100
-        .data
-        .balign 4
-co_thread_mode:                 @ 0x10 USR (normal), 0x1F SYS (for comparing)
-        .word   0x10
         .text
 
 @ int co_start (void (*fn) (void *), void *arg, void *stack, size_t size)
@@ -93,7 +87,7 @@ co_start:
 1:      mvn     r0, #0
         bx      lr
 
-@ USR (or SYS) mode: fn (arg); when fn returns, not alive, back to the resumer.
+@ USR mode: fn (arg); when fn returns, not alive, back to the resumer.
 trampoline:
         mov     r0, r5
         blx     r4
@@ -128,15 +122,12 @@ co_resume:
         ldr     r3, [ip, #IN_LR]
         mrs     r0, cpsr
         bic     r0, r0, #0x9F           @ mode bits and I
-        ldr     r1, =co_thread_mode
-        ldr     r1, [r1]
-        and     r1, r1, #0x1F
-        orr     r0, r0, r1              @ USR32 (or SYS32), interrupts on
+        orr     r0, r0, #0x10           @ USR32, interrupts on
         msr     cpsr_c, r0
         mov     sp, r2                  @ (the user sp now)
         bx      r3                      @ co_yield's return, or the trampoline
 
-@ void co_yield (void): inside the thread (USR or SYS mode)
+@ void co_yield (void): inside the thread (USR mode)
 co_yield:
         ldr     ip, =co_state
         ldr     r0, [ip, #INSIDE]

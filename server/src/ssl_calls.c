@@ -1,6 +1,6 @@
 /* RDPServer: xrdp's ssl_calls interface (common/ssl_calls.h) without
    OpenSSL, on mbedTLS: the crypto Standard RDP Security uses (RC4, which
-   mbedTLS 3 no longer has, is here), and since 0.2-test14 TLS 1.2 (below).
+   mbedTLS 3 no longer has, is here), and TLS 1.2 (below).
 
    The behaviour of each call (byte order, padding, what is returned)
    follows xrdp 0.10.6's OpenSSL version, which this replaces.
@@ -390,7 +390,7 @@ ssl_gen_key_xrdp1 (int key_size_in_bits, const char *exp, int exp_len,
   return error;
 }
 
-/* --- TLS (0.2-test14): mbedTLS's TLS 1.2 server -------------------------------------
+/* --- TLS: mbedTLS's TLS 1.2 server -------------------------------------
    libxrdp starts TLS after the X.224 exchange on the connection it already
    has (trans_set_tls_mode: ssl_tls_create, then ssl_tls_accept), then
    reads and writes through ssl_tls_read and ssl_tls_write. The records go

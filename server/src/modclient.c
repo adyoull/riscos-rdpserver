@@ -345,7 +345,7 @@ server_get_status (server_status *st)
 }
 
 /* The desktop is shutting down: leave the module serving without us, so
-   a client can still use this computer (to click Restart). (0.2-test23) */
+   a client can still use this computer (to click Restart). */
 void
 server_leave_running (void)
 {

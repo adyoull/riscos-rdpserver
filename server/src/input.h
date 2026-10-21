@@ -15,12 +15,12 @@
    Wimp) and if the button is still down after a delay takes it as
    "double-click and hold", which it treats as a Shift-double-click
    (Filer s/Clicks): an application opens as a folder, a file loads into
-   !Edit. That is what test1 to test3 did. So a button-down waits until
+   !Edit. So a button-down waits until
    its button-up has arrived, then the two go as one click: s->click
    presses the button and has a ticker event let go of it INQ_CLICK_CS
    later, whoever has the machine then. The Wimp must see the button down
-   at a poll, so the down and up can't simply go together (test4 did that:
-   no clicks at all). A button held longer than INQ_HOLD_CS, or moved
+   at a poll, so the down and up can't simply go together (that gives no
+   clicks at all). A button held longer than INQ_HOLD_CS, or moved
    with (a drag), goes down on its own.
 
    Copyright (c) 2026 Andrew Youll. MIT licence (see LICENSE). */

@@ -41,9 +41,9 @@ extern volatile int mod_errorbox_open;   /* read by the ByteV veneer */
 
 #define ByteV 6
 #define STACK_BYTES (512 * 1024)
-#define HEAP_MAX (128 * 1024 * 1024)   /* (48 until 0.2-test31: too little for a 4K screen's login page) */
+/* 48 MB is too little for a 4K screen's login page */
+#define HEAP_MAX (128 * 1024 * 1024)
 #define TICKER_CS 1                       /* OS_CallEvery: every 2 cs */
-#define EXTRA_TURNS 0                     /* see drive(); RDPServer$ExtraTurns */
 
 static struct
 {
@@ -55,12 +55,9 @@ static struct
   unsigned driving_since;                 /* and when (cs) */
   int started;                            /* mod_start succeeded, no stop since */
   int restart;                            /* start again (the thread was lost) */
+  int stop_due;                           /* the front end went during a run: stop at the next */
   int orphan;                             /* left serving at a desktop shutdown */
   unsigned lost;
-  int eager;                              /* the next callback runs the thread, due or not */
-  int extra;                              /* extra turns in this burst */
-  unsigned extra_cs;                      /* when the burst began */
-  int extra_max;                          /* EXTRA_TURNS, or RDPServer$ExtraTurns */
   int attached_task;                      /* the front end, or 0 */
   int dead;
   void *stack;
@@ -162,7 +159,6 @@ lost (void)
   m.driving = 1;
   m.driving_sp = svc_sp ();
   m.driving_since = plat_time_cs ();
-  m.eager = 0;
   m.lost++;
   rdps_console_line ('s', "the server was lost (a program was stopped in the "
                      "middle of the server's turn): starting it again");
@@ -190,7 +186,7 @@ lost (void)
       m.dead = 1;
       return;
     }
-  m.restart = m.started;
+  m.restart = m.started && !m.stop_due;
 }
 
 static int
@@ -229,46 +225,24 @@ static void add_callback (void);
 static void
 drive (void)
 {
-  int eager = m.eager;
-  m.eager = 0;
   if (!take ())
     return;
+  if (m.stop_due)
+    {
+      m.stop_due = 0;
+      m.restart = 0;
+      rdps_cmd_stop ();
+      m.started = 0;
+    }
   if (m.restart)
     {
       m.restart = 0;
       if (rdps_cmd_start (&m.opt) != 0)
         m.started = 0;
     }
-  {
-    unsigned sent = rdps_bytes_sent, now;
-    if (eager || rdps_thread_due (plat_time_cs ()))
-      rdps_thread_run ();
-    give ();
-    /* Sent something and has more to do soon (it's waiting for room to
-       send, or for its next band of the screen): ask for the next turn
-       straight away, not at the next tick (2 cs). Callbacks already
-       queued run first - the Internet module's, which take in the
-       client's ACKs and send what's queued - so the turns and the
-       Internet module's work interleave, as they did inside the turn
-       when the thread ran in USR mode. Only after progress, and in
-       bursts of at most EXTRA_TURNS turns within 1 cs, at most one burst
-       per 2 cs: the desktop keeps at least half its time. (A count
-       reset by the ticker wouldn't do: a turn can outlast a tick.) */
-    now = plat_time_cs ();
-    if ((int) (now - m.extra_cs) >= 2)
-      {
-        m.extra_cs = now;
-        m.extra = 0;
-      }
-    if (rdps_bytes_sent != sent && !m.dead && m.extra < m.extra_max
-        && (int) (now - m.extra_cs) < 1
-        && (int) (rdps_thread_wake_time () - now) <= 1)
-      {
-        m.extra++;
-        m.eager = 1;
-        add_callback ();
-      }
-  }
+  if (rdps_thread_due (plat_time_cs ()))
+    rdps_thread_run ();
+  give ();
 }
 
 /* Asks for the callback, if one isn't on its way. From the ticker
@@ -332,7 +306,7 @@ mod_bytev (void)
    turns, in case the clock isn't running), until the page has gone to
    the network stack and our side of the connection is shut after it
    (that it then reaches the client depends on the network driver: it
-   may already have stopped for the reset). Not claimed. (0.2-test24) */
+   may already have stopped for the reset). Not claimed. */
 static void
 prereset (void)
 {
@@ -392,6 +366,13 @@ mod_service (int r0, int service, int r2)
           m.started = 0;
           m.restart = 0;
           give ();
+        }
+      else
+        {
+          /* a run is in progress (deeper on the SVC stack, or the thread
+             was lost there): stop at the next, and don't start again */
+          m.stop_due = 1;
+          m.restart = 0;
         }
       m.attached_task = 0;
     }
@@ -494,6 +475,7 @@ mod_start (const rdps_mod_options *o)
     return 1;
   m.started = 0;
   m.restart = 0;
+  m.stop_due = 0;
   m.mopt = *o;
   m.mopt.port[sizeof m.mopt.port - 1] = 0;
   m.mopt.address[sizeof m.mopt.address - 1] = 0;
@@ -513,45 +495,6 @@ mod_start (const rdps_mod_options *o)
   m.opt.require_tls = m.mopt.require_tls;
   m.opt.send_sound = m.mopt.send_sound;
   m.opt.log_file = NULL;               /* libxrdp's log: to the messages */
-  {
-    /* RDPServer$ThreadMode SYS: the thread in SYS mode, for comparing
-       (0.2-test6 to test8's: no callbacks in its turn, so the Internet
-       module's work waits and sending is slow). */
-    extern int co_thread_mode;
-    char v[8];
-    int len = -1;
-    co_thread_mode = 0x10;
-    if (_swix (OS_ReadVarVal, _INR (0, 4) | _OUT (2), "RDPServer$ThreadMode", v,
-               (int) sizeof v - 1, 0, 3, &len) == NULL && len == 3
-        && (v[0] | 32) == 's' && (v[1] | 32) == 'y' && (v[2] | 32) == 's')
-      {
-        co_thread_mode = 0x1F;
-        rdps_console_line ('s', "the server thread runs in SYS mode "
-                           "(RDPServer$ThreadMode): for comparing only");
-      }
-  }
-
-  {
-    /* RDPServer$ExtraTurns 0..8: see drive(). Off by default: with the
-       thread in USR mode the Internet module's work runs inside the turn. */
-    char v[8];
-    int len = -1;
-    m.extra_max = EXTRA_TURNS;
-    if (_swix (OS_ReadVarVal, _INR (0, 4) | _OUT (2), "RDPServer$ExtraTurns", v,
-               (int) sizeof v - 1, 0, 3, &len) == NULL && len > 0 && len < (int) sizeof v)
-      {
-        v[len] = 0;
-        if (v[0] >= '0' && v[0] <= '8' && v[1] == 0)
-          m.extra_max = v[0] - '0';
-      }
-    if (m.extra_max != EXTRA_TURNS)
-      {
-        char line[80];
-        rdps_snprintf_buf (line, sizeof line, "extra turns: %d (RDPServer$ExtraTurns)",
-                           m.extra_max);
-        rdps_console_line ('s', line);
-      }
-  }
   r = rdps_cmd_start (&m.opt);
   m.started = r == 0;
   give ();
@@ -604,7 +547,7 @@ mod_set_sound (int on)
   return r;
 }
 
-/* Choices' "detailed log" (0.2-test26). */
+/* Choices' "detailed log". */
 int
 mod_set_verbose (int on)
 {
@@ -693,8 +636,7 @@ mod_init (int *private_word)
   m.private_word = private_word;
   *private_word = (int) &m;               /* OS_Module 18 gives this as R4 */
   rdps_ctype_init ();
-  /* (an older RISC OS may not give 128 MB of address space: 48, as
-     before 0.2-test31) */
+  /* (an older RISC OS may not give 128 MB of address space: 48) */
   if (rdps_heap_init ("RDPServer", HEAP_MAX) != 0
       && rdps_heap_init ("RDPServer", 48 * 1024 * 1024) != 0)
     return &err_nomem;

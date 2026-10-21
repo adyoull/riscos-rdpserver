@@ -5,7 +5,7 @@
    memcmp on the screen 42 MB/s, memcpy 680 MB/s; 0.2: this way, 20.5 ms a
    1080p frame). Each row is compared with the last frame in 64-pixel
    pieces, so each changed piece marks one 64x64 tile; the copy is kept up
-   to date, and tiles are sent from it. Since 0.2-test15 each dirty tile
+   to date, and tiles are sent from it. Each dirty tile
    also keeps the rectangle within it that changed (the rows, and the
    first and last pixel that differ in them), and only that is sent: a
    typed letter or the caret is a few pixels, not a 64x64 bitmap.
@@ -41,7 +41,7 @@ typedef struct
    memcpy). CAP_COPY_LDM8 unless set otherwise. */
 #define CAP_COPY_WORDS 1
 #define CAP_COPY_LDM8 2
-#define CAP_COPY_NEON 3    /* NEON (0.2-test30): cap_scan switches to the
+#define CAP_COPY_NEON 3    /* NEON: cap_scan switches to the
                              module's VFP context around a scan; outside one,
                              as LDM8 */
 extern int cap_copy_way;

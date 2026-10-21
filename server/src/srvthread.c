@@ -94,12 +94,6 @@ rdps_thread_due (unsigned now)
   return ready && (cmd != CMD_NONE || dropping || (int) (now - wake) >= 0);
 }
 
-unsigned
-rdps_thread_wake_time (void)
-{
-  return wake;
-}
-
 void
 rdps_thread_run (void)
 {

@@ -3,12 +3,12 @@
 An RDP server for RISC OS, so the RISC OS desktop can be used from the
 Remote Desktop clients built into Windows, macOS, iOS, Android and Linux.
 
-**Status: release candidate (0.2-rc3).** Runs on a
+**Status: 0.2 released.** Runs on a
 Raspberry Pi 4 with RISC OS 5, used from Windows App on a Mac; also
 tested from rdesktop and FreeRDP on Linux.
 What's here:
 
-- `server/`: **RDPServer 0.2-rc3**, built on xrdp's libxrdp. The server
+- `server/`: **RDPServer 0.2**, built on xrdp's libxrdp. The server
   is a relocatable module (`src/mod`), so it keeps going while the desktop
   doesn't multitask (a Wimp error box, a program holding the machine, or
   one stopped with Alt-Break: the server restarts and clients reconnect
@@ -30,6 +30,25 @@ What's here:
   **For your own network only.** Video and 3D in a hardware overlay (Reel,
   EGL/Mesa programs) show as a black window on the client.
 
+## Screenshots
+
+What a client sees when a login is set and it hasn't sent the right
+user name and password (Windows' Remote Desktop Connection, say):
+nothing of the desktop is shown until the login is right.
+
+![The login screen on the client](docs/images/login-screen.png)
+
+The Choices window: the port, the login, sound, TLS only, and the
+detailed log for reporting problems.
+
+![RDPServer's Choices window](docs/images/choices.jpg)
+
+The Status window with Windows App on a Mac connected.
+
+![RDPServer's Status window](docs/images/status.jpg)
+
+## Also here
+
 - `probe/`: **RDPSProbe 0.2**, a test program for a Raspberry Pi. It
   measures how fast the screen can be read and compared, and checks that
   the mouse and keyboard can be driven the way a remote client would.
@@ -44,7 +63,7 @@ link: tools/modlink.py).
 ```sh
 cd server
 tools/fetch.sh                                    # xrdp and Mbed TLS, patched
-make RCD_DIR=/path/to/riscos-crossdev             # build/RDPServer-0.2-rc3.zip
+make RCD_DIR=/path/to/riscos-crossdev             # build/RDPServer-0.2.zip
 make RCD_DIR=/path/to/riscos-crossdev host qemu module check
 tests/e2e.sh                                      # real clients, Linux build
 RCD_DIR=/path/to/riscos-crossdev QEMU=1 tests/e2e.sh   # ARM build, alignment traps on

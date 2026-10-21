@@ -321,7 +321,7 @@ cap_pixel (const capture *c, int x, int y)
   return c->frame + (size_t) y * c->row_bytes + (size_t) x * c->bits / 8;
 }
 
-/* Reading the screen by NEON (0.2-test30): the module's VFP context is
+/* Reading the screen by NEON: the module's VFP context is
    switched to once around a whole scan (nothing in it lets other programs
    run, so no task can be paged in meanwhile), and back. If it can't be,
    the rows go by LDM 8 (cap_copy_with). */

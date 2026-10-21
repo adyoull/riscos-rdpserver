@@ -70,7 +70,7 @@ bss_start:      .word   0
 bss_end:        .word   0
 
 title:  .asciz  "RDPServer"
-help:   .asciz  "RDPServer\t0.31 (17 Oct 2026) RDP server (the !RDPServer front end runs it)"
+help:   .asciz  "RDPServer\t0.33 (21 Oct 2026) RDP server (the !RDPServer front end runs it)"
         .balign 4
 flags:  .word   1                               @ 32-bit compatible
 

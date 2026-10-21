@@ -263,33 +263,8 @@ m.service(0, 0x53, 0x1234)            # Service_WimpCloseDown, the front end
 run_for(m, 60)
 msgs = messages(m)
 check(status(m)["listening"] == 0, "the front end went: not started again (%r)" % msgs[-200:])
-m.vars["RDPServer$ExtraTurns"] = "2"
 check(m.entry(ATTACH, 0x1234) == 0 and m.entry(START, options(m, port)) == 0,
       "attached and started again by the front end")
-check("extra turns: 2" in messages(m), "RDPServer$ExtraTurns read at the start")
-del m.vars["RDPServer$ExtraTurns"]
-# RDPServer$ThreadMode SYS (comparing): the thread runs in SYS mode,
-# where no callbacks come inside it
-m.entry(STOP)
-m.vars["RDPServer$ThreadMode"] = "SYS"
-check(m.entry(START, options(m, port)) == 0 and "runs in SYS mode" in messages(m),
-      "RDPServer$ThreadMode SYS: started, and said so")
-m.kill_armed = True
-run_for(m, 40)
-m.kill_armed = False
-check(m.killed_in_thread == 1, "SYS mode: no task stop came inside the thread")
-try:
-    c = socket.create_connection(("127.0.0.1", port), timeout=2)
-    run_for(m, 60)
-    check(status(m)["connecting"] == 1, "SYS mode: a client is taken on")
-    c.close()
-    run_for(m, 20)
-except OSError as e:
-    check(False, "SYS mode: the port takes connections (%s)" % e)
-m.entry(STOP)
-del m.vars["RDPServer$ThreadMode"]
-check(m.entry(START, options(m, port)) == 0 and "runs in SYS mode" not in messages(m),
-      "and back in USR mode")
 check(status(m)["listening"] == 1, "listening")
 
 # --- 7: stop, detach, finalise ----------------------------------------------
