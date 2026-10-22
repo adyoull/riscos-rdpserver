@@ -14,6 +14,9 @@
 # Needs: Xvfb, rdesktop, xfreerdp3, ImageMagick, xdotool, python3 unicorn.
 set -u
 cd "$(dirname "$0")/.."
+# The clients connect to this computer: never through a web proxy (FreeRDP
+# takes https_proxy and the like for any connection).
+unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY all_proxy ALL_PROXY
 OUT=$PWD/build/tests/e2e-module
 RDESKTOP=$PWD/tests/rdesktop-yes.sh   # accepts the server's new certificate
 export RDESKTOP_HOME=$PWD/build/tests/rdesktop-home

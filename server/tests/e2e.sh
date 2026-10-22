@@ -11,6 +11,9 @@
 # Needs: Xvfb, rdesktop, xfreerdp3, ImageMagick, xdotool.
 set -u
 cd "$(dirname "$0")/.."
+# The clients connect to this computer: never through a web proxy (FreeRDP
+# takes https_proxy and the like for any connection).
+unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY all_proxy ALL_PROXY
 # QEMU=1: the ARM build under qemu-arm-aligntrap (RISC OS's alignment
 # rules: an unaligned access stops the server, exit status 135).
 if [ "${QEMU:-0}" = 1 ]; then

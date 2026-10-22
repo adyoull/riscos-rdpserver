@@ -1,0 +1,84 @@
+# A port's build on GitHub, in the riscos-crossdev container image.
+# Copy to .github/workflows/riscos-build.yml in your repository. The image
+# is the one for the riscos-crossdev release named in .riscos-deps at the
+# top of the repository (a line `riscos-crossdev v1.8`; see
+# riscos-deps-update.yml). Change BUILD to your build and test command, and
+# ARTIFACTS to what it makes. PACKAGES: Ubuntu packages your build needs
+# that the image hasn't (docker/Dockerfile lists what it has); set the same
+# in riscos-deps-update.yml.
+#
+# From riscos-crossdev's ci/ (docs/CI.md). MIT licence.
+# riscos-rdpserver: an e2e job added (real RDP clients), as BUILD only runs
+# the tests that need none.
+name: RISC OS build
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+env:
+  # The RISC OS program and module, the app zip, and the tests that need no
+  # RDP client: units (Linux and ARM under qemu-arm-aligntrap), the Fake
+  # RISC OS, the module in the Unicorn emulator.
+  BUILD: cd server && tools/fetch.sh && make RCD_DIR=$RCD_DIR all host qemu module check
+  ARTIFACTS: server/build/RDPServer-*.zip
+  PACKAGES: "python3-pyelftools"   # tools/modlink.py links the module with it
+  # The end-to-end tests: real RDP clients (rdesktop, FreeRDP) in a virtual
+  # X display against the Linux build and the emulated module.
+  E2E: cd server && tools/fetch.sh && make RCD_DIR=$RCD_DIR host module && tests/e2e.sh && tests/e2e_module.sh
+  E2E_PACKAGES: "python3-pyelftools xvfb rdesktop freerdp3-x11 imagemagick xdotool"
+
+jobs:
+  pin:
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.pin.outputs.version }}
+    steps:
+      - uses: actions/checkout@v6
+      - id: pin
+        run: |
+          v=$(awk '$1 == "riscos-crossdev" || $1 == "adyoull/riscos-crossdev" {sub(/^v/, "", $2); print $2}' .riscos-deps)
+          [ -n "$v" ] || { echo ".riscos-deps has no riscos-crossdev line" >&2; exit 1; }
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: pin
+    runs-on: ubuntu-24.04
+    container: ghcr.io/adyoull/riscos-crossdev:${{ needs.pin.outputs.version }}
+    steps:
+      - uses: actions/checkout@v6
+      - name: Packages this port needs
+        if: env.PACKAGES != ''
+        run: |
+          apt-get update -qq
+          apt-get install -y -qq --no-install-recommends $PACKAGES
+      - name: Build, check and test
+        run: ${{ env.BUILD }}
+      - uses: actions/upload-artifact@v7
+        with:
+          name: riscos-build
+          path: ${{ env.ARTIFACTS }}
+          if-no-files-found: warn
+
+  e2e:
+    needs: pin
+    runs-on: ubuntu-24.04
+    container: ghcr.io/adyoull/riscos-crossdev:${{ needs.pin.outputs.version }}
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v6
+      - name: RDP clients and a virtual display
+        run: |
+          apt-get update -qq
+          apt-get install -y -qq --no-install-recommends $E2E_PACKAGES
+      - name: End-to-end tests
+        run: ${{ env.E2E }}
+      - uses: actions/upload-artifact@v7
+        if: failure()
+        with:
+          name: e2e-logs
+          path: |
+            server/build/tests/e2e
+            server/build/tests/e2e-module
+          if-no-files-found: ignore

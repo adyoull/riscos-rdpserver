@@ -70,6 +70,35 @@ RCD_DIR=/path/to/riscos-crossdev QEMU=1 tests/e2e.sh   # ARM build, alignment tr
 tests/e2e_module.sh                               # real clients, the module emulated
 ```
 
+## Building on GitHub
+
+Every push and pull request is built and tested by GitHub Actions
+(`.github/workflows/riscos-build.yml`), in the riscos-crossdev container
+image for the release named in `.riscos-deps`:
+
+- **build:** `tools/fetch.sh`, then `make all host qemu module check`: the
+  RISC OS program, the module and the app zip (kept as the run's
+  artifact), with the unit tests (also as ARM code under
+  qemu-arm-aligntrap), the Fake RISC OS tests and the module in the
+  Unicorn emulator;
+- **e2e:** `tests/e2e.sh` and `tests/e2e_module.sh`, with rdesktop and
+  FreeRDP in a virtual display against the Linux build and the emulated
+  module (their logs are kept if they fail).
+
+Once a day `.github/workflows/riscos-deps-update.yml` looks for a newer
+riscos-crossdev release; if there is one, it builds with it and opens a
+pull request saying whether that passed. Nothing is merged or released
+by itself. (Repository settings: Actions > General > Workflow
+permissions "Read and write", and "Allow GitHub Actions to create and
+approve pull requests".)
+
+The same build on your own machine, with Docker:
+
+```sh
+docker run --rm -v "$PWD":/src ghcr.io/adyoull/riscos-crossdev:1.8.2 sh -c \
+  'apt-get update -qq && apt-get install -y -qq python3-pyelftools && cd server && tools/fetch.sh && make RCD_DIR=$RCD_DIR all host qemu module check'
+```
+
 ## Building RDPSProbe
 
 Needs [riscos-crossdev](https://github.com/adyoull/riscos-crossdev) (a
